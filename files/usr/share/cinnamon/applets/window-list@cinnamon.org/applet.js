@@ -841,6 +841,16 @@ AppMenuButtonRightClickMenu.prototype = {
         this.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
 
         // Close all/others
+        item = new PopupMenu.PopupIconMenuItem(_("Close all this app"), "application-exit", St.IconType.SYMBOLIC);
+        item.connect('activate', Lang.bind(this, function() {
+            for (let window of this._windows)
+                if (window.actor.visible &&
+                   !window._needsAttention &&
+                    window.metaWindow.get_wm_class() == this.metaWindow.get_wm_class())
+                    window.metaWindow.delete(global.get_current_time());
+        }));
+        this.addMenuItem(item);
+
         item = new PopupMenu.PopupIconMenuItem(_("Close all"), "application-exit", St.IconType.SYMBOLIC);
         item.connect('activate', Lang.bind(this, function() {
             for (let window of this._windows)
