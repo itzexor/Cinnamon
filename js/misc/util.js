@@ -83,8 +83,10 @@ let subprocess_callbacks = {};
  * @args: an array containing all arguments of the command to be run
  * @callback: the callback to run when the command has completed
  *
- * Asynchronously Runs the command passed to @args. When the command is complete, the callback will
- * be called with the contents of stdout from the command passed as the only argument.
+ * Asynchronously runs the command passed to @args. When the command is complete, @callback will
+ * be called with the contents of stdout from the command passed as first argument, and the exit
+ * status of the command as the second argument. If the command is not found, an empty result will be
+ * returned with an exit status of 1.
  */
 function spawn_async(args, callback) {
     subprocess_id++;
