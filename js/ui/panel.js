@@ -2146,6 +2146,10 @@ Panel.prototype = {
      * Turns on/off the highlight of the panel
      */
     highlight: function(highlight) {
+        if (this._highlight == highlight)
+            return;
+
+        this._highlight = highlight;
         this.actor.change_style_pseudo_class('highlight', highlight);
     },
 
@@ -2981,6 +2985,18 @@ Panel.prototype = {
      * false = autohide, true = always show, intel = Intelligent
      */
     _updatePanelVisibility: function() {
+        // Show immediately, and never hide during highlight
+        if (this._highlight) {
+            // Remove any show/hide timer currently active
+            if (this._showHideTimer) {
+                global.log("removing showhidetimer");
+                Mainloop.source_remove(this._showHideTimer);
+                this._showHideTimer = 0;
+            }
+            if (this._hidden)
+                this._showPanel("mew");
+            return;
+        }
 
         switch (this._autohideSettings) {
             case "false":
@@ -3117,7 +3133,7 @@ Panel.prototype = {
      * A function to force the panel to show. This has no effect if the panel
      * is disabled.
      */
-    _showPanel: function() {
+    _showPanel: function(skip_animate) {
         this._showHideTimer = 0;
 
         if (this._disabled) return;
@@ -3127,31 +3143,46 @@ Panel.prototype = {
         // Force the panel to be on top (hack to correct issues when switching workspace)
         Main.layoutManager._windowsRestacked();
 
+        if (skip_animate) {
+            //return;
+        }
+
+        let animation_type, x, y, jj;
+        let height = this.actor.get_height();
+        let width = this.actor.get_width();
+
+        switch (this.panelPosition) {
+            case PanelLoc.top:
+                y = this.monitor.y;
+                jj = this.monitor.y - height;
+                animation_type = 0;
+                break;
+            case PanelLoc.bottom:
+                y = this.monitor.y + this.monitor.height - height
+                jj = this.monitor.y + this.monitor.height;
+                animation_type = 0;
+                break;
+            case PanelLoc.left:
+                x = this.monitor.x;
+                jj = this.monitor.x - width
+                animation_type = 1;
+                break;
+            case PanelLoc.right:
+                x = this.monitor.width - width + this.monitor.x;
+                jj = this.monitor.width + this.monitor.x
+                animation_type = 1;
+                break;
+        }
+
         let animationTime = AUTOHIDE_ANIMATION_TIME;
 
-        if (this.panelPosition == PanelLoc.top || this.panelPosition == PanelLoc.bottom) { // horizontal panel, animation on y
-            let height = this.actor.get_height();
-            let y;
-            switch (this.panelPosition) {
-                case PanelLoc.top:
-                    y = this.monitor.y; // target end position when y = 0
-                    break;
-                case PanelLoc.bottom:
-                    y = this.monitor.y + this.monitor.height - height;
-                    break;
-            }
+        //boxes
+        this._leftBox.show();
+        this._centerBox.show();
+        this._rightBox.show();
 
-            // boxes
-            this._leftBox.show();
-            this._centerBox.show();
-            this._rightBox.show();
-
-            let jj;
-            switch (this.panelPosition) {
-                case PanelLoc.top: jj = this.monitor.y - height; break;
-                case PanelLoc.bottom: jj = this.monitor.y + this.monitor.height; break; 
-            }
-            // panel
+        if (animation_type == 0) { // horizontal panel, animation on y
+            //panel
             Tweener.addTween(this.actor,
                             { y: y,
                             time: animationTime,
@@ -3175,54 +3206,7 @@ Panel.prototype = {
                             }),
                             onUpdateParams: [jj, this.panelPosition]
                             }); 
-            // boxes - fade in as panel slides
-            let params = { opacity: 255,
-                           time: animationTime+0.2,
-                           transition: 'easeOutQuad' };
-
-            Tweener.addTween(this._leftBox, params);
-            Tweener.addTween(this._centerBox, params);
-            Tweener.addTween(this._rightBox, params);
-            // corners
-            //let params = { y: height - 1,
-            //                time: animationTime + 0.1,
-            //                transition: 'easeOutQuad'
-            //                };
-            if (this._leftCorner) {
-            //  this._leftCorner._repaint();
-                //Tweener.addTween(this._leftCorner.actor, params);
-            }
-            if (this._rightCorner) {
-            //  this._rightCorner._repaint();
-                //Tweener.addTween(this._rightCorner.actor, params);
-            }
         } else {  // vertical panel, animation on x
-            let width = this.actor.get_width();
-            let x;
-            switch (this.panelPosition) {
-                case PanelLoc.left: 
-                    x = this.monitor.x; // target end position when x = 0
-                    break;
-                case PanelLoc.right: 
-                    x = this.monitor.width - width + this.monitor.x;
-                    break;
-            }
-            // corners
-            //let params = { x: width - 1,
-            //                time: animationTime + 0.1,
-            //                transition: 'easeOutQuad'
-            //                };
-
-            // boxes
-            this._leftBox.show();
-            this._centerBox.show();
-            this._rightBox.show();
-
-            let jj;
-            switch (this.panelPosition) {
-                case PanelLoc.left: jj = this.monitor.x - width;
-                case PanelLoc.right: jj = this.monitor.width + this.monitor.x;
-            }
             // panel
             Tweener.addTween(this.actor,
                             { x: x,
@@ -3246,24 +3230,29 @@ Panel.prototype = {
                             }),
                             onUpdateParams: [jj, this.panelPosition]
                             }); 
-            // boxes - fade in as panel slides
-            let params = { opacity: 255,
-                           time: animationTime + 0.2,
-                           transition: 'easeOutQuad' };
-
-            Tweener.addTween(this._leftBox, params);
-            Tweener.addTween(this._centerBox, params);
-            Tweener.addTween(this._rightBox, params);
-            if (this._leftCorner) {
-                //this._leftCorner._repaint();
-                //Tweener.addTween(this._leftCorner.actor, params);
-            }
-            if (this._rightCorner) {
-                //this._rightCorner._repaint();
-                //Tweener.addTween(this._rightCorner.actor, params);
-            }
         }
 
+        // boxes - fade in as panel slides
+        let params = { opacity: 255,
+                       time: animationTime+0.2,
+                       transition: 'easeOutQuad' };
+
+        Tweener.addTween(this._leftBox, params);
+        Tweener.addTween(this._centerBox, params);
+        Tweener.addTween(this._rightBox, params);
+        // corners
+        //let params = { y: height - 1,
+        //                time: animationTime + 0.1,
+        //                transition: 'easeOutQuad'
+        //                };
+        if (this._leftCorner) {
+        //  this._leftCorner._repaint();
+            //Tweener.addTween(this._leftCorner.actor, params);
+        }
+        if (this._rightCorner) {
+        //  this._rightCorner._repaint();
+            //Tweener.addTween(this._rightCorner.actor, params);
+        }
         this._hidden = false;
     },
 
