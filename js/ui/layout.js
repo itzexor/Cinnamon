@@ -1,5 +1,9 @@
 // -*- mode: js; js-indent-level: 4; indent-tabs-mode: nil -*-
 
+/**
+ * FILE:layout.js
+ * @short_description: The file responsible for managing Cinnamon chrome
+ */
 const Clutter = imports.gi.Clutter;
 const GLib = imports.gi.GLib;
 const Gio = imports.gi.Gio;
@@ -29,6 +33,13 @@ function isPopupMetaWindow(actor) {
     }
 }
 
+/**
+ * #Monitor
+ * 
+ * @short_description: object representing a monitor
+ *
+ * Represents a monitor on the screen.
+ */
 function Monitor(index, geometry) {
     this._init(index, geometry);
 }
@@ -47,6 +58,14 @@ Monitor.prototype = {
     }
 };
 
+/**
+ * #LayoutManager
+ * 
+ * @short_description: Manager of Cinnamon Chrome
+ *
+ * Creates and manages the Chrome container which holds
+ * all of the Cinnamon UI actors.
+ */
 function LayoutManager() {
     this._init.apply(this, arguments);
 }
@@ -62,8 +81,6 @@ LayoutManager.prototype = {
         this.edgeLeft = null;
         this.hideIdleId = 0;
         this._chrome = new Chrome(this);
-
-        this._isPopupWindowVisible = false;
 
         this.enabledEdgeFlip = global.settings.get_boolean("enable-edge-flip");
         this.edgeFlipDelay = global.settings.get_int("edge-flip-delay");
@@ -83,13 +100,7 @@ LayoutManager.prototype = {
 
         global.settings.connect("changed::enable-edge-flip", Lang.bind(this, this._onEdgeFlipChanged));
         global.settings.connect("changed::edge-flip-delay", Lang.bind(this, this._onEdgeFlipChanged));
-        global.screen.connect('restacked', Lang.bind(this, this._windowsRestacked));
-        global.screen.connect('monitors-changed',
-                              Lang.bind(this, this._monitorsChanged));
-        global.screen.connect('in-fullscreen-changed',
-                              Lang.bind(this, this._updateFullscreen));
-        global.window_manager.connect('switch-workspace',
-                                      Lang.bind(this, this._windowsRestacked));
+        global.screen.connect('monitors-changed', Lang.bind(this, this._monitorsChanged));
     },
 
     _onEdgeFlipChanged: function(){
@@ -99,14 +110,6 @@ LayoutManager.prototype = {
         this.edgeRight.delay = this.edgeFlipDelay;
         this.edgeLeft.enabled = this.enabledEdgeFlip;
         this.edgeLeft.delay = this.edgeFlipDelay;
-    },
-
-    _windowsRestacked: function() {
-        this._chrome.updateRegions();
-    },
-
-    _updateFullscreen: function() {
-        this._chrome._updateFullscreen();
     },
 
     // This is called by Main after everything else is constructed;
@@ -163,20 +166,15 @@ LayoutManager.prototype = {
         this.bottomMonitor = this.monitors[this.bottomIndex];
     },
 
-    _updateHotCorners: function() {
+    _updateBoxes: function() {
         if (this.hotCornerManager)
             this.hotCornerManager.updatePosition(this.primaryMonitor, this.bottomMonitor);
-    },
-
-    _updateBoxes: function() {
-        this._updateHotCorners();
         this._chrome._queueUpdateRegions();
     },
 
     _monitorsChanged: function() {
         this._updateMonitors();
         this._updateBoxes();
-        this._updateHotCorners();
         this.emit('monitors-changed');
     },
 
@@ -332,68 +330,120 @@ LayoutManager.prototype = {
         this.keyboardBox.hide();
     },
 
-    // addChrome:
-    // @actor: an actor to add to the chrome
-    // @params: (optional) additional params
-    //
-    // Adds @actor to the chrome, and (unless %affectsInputRegion in
-    // @params is %false) extends the input region to include it.
-    // Changes in @actor's size, position, and visibility will
-    // automatically result in appropriate changes to the input
-    // region.
-    //
-    // If %affectsStruts in @params is %true (and @actor is along a
-    // screen edge), then @actor's size and position will also affect
-    // the window manager struts. Changes to @actor's visibility will
-    // NOT affect whether or not the strut is present, however.
-    //
-    // If %visibleInFullscreen in @params is %true, the actor will be
-    // visible even when a fullscreen window should be covering it.
+    /** 
+     * updateChrome:
+     * @doVisibility: (boolean)(optional) whether to recalculate visibility.
+     *
+     * Updates input region and struts for all chrome actors. If @doVisibility is true,
+     * then the visibility state of all chrome actors is recalculated first.
+     * 
+     * Use with care as this is already frequently updated, and can reduce performance
+     * if called unnecessarily.
+     */
+    updateChrome: function(doVisibility) {
+        if (doVisibility === true)
+            this._chrome._updateVisibility();
+        else
+            this._chrome._queueUpdateRegions();
+    },
+
+    /**
+     * addChrome:
+     * @actor (Clutter.Actor): an actor to add to the chrome
+     * @params (Layout.ChromeParams): (optional) additional params
+     *
+     * Adds @actor to the chrome, and (unless %affectsInputRegion in
+     * @params is %false) extends the input region to include it.
+     * Changes in @actor's size, position, and visibility will
+     * automatically result in appropriate changes to the input
+     * region.
+     *
+     * If %affectsStruts in @params is %true (and @actor is along a
+     * screen edge), then @actor's size and position will also affect
+     * the window manager struts. Changes to @actor's visibility will
+     * NOT affect whether or not the strut is present, however.
+     *
+     * If %visibleInFullscreen in @params is %true, the actor will be
+     * visible even when a fullscreen window should be covering it.
+     */
     addChrome: function(actor, params) {
         this._chrome.addActor(actor, params);
     },
 
-    // trackChrome:
-    // @actor: a descendant of the chrome to begin tracking
-    // @params: parameters describing how to track @actor
-    //
-    // Tells the chrome to track @actor, which must be a descendant
-    // of an actor added via addChrome(). This can be used to extend the
-    // struts or input region to cover specific children.
-    //
-    // @params can have any of the same values as in addChrome(),
-    // though some possibilities don't make sense (eg, trying to have
-    // a %visibleInFullscreen child of a non-%visibleInFullscreen
-    // parent). By default, @actor has the same params as its chrome
-    // ancestor.
+    /**
+     * trackChrome:
+     * @actor (Clutter.Actor): a descendant of the chrome to begin tracking
+     * @params (Layout.ChromeParams): parameters describing how to track @actor
+     *
+     * Tells the chrome to track @actor, which must be a descendant
+     * of an actor added via addChrome(). This can be used to extend the
+     * struts or input region to cover specific children.
+     *
+     * @params can have any of the same values as in addChrome(),
+     * though some possibilities don't make sense (eg, trying to have
+     * a %visibleInFullscreen child of a non-%visibleInFullscreen
+     * parent). By default, @actor has the same params as its chrome
+     * ancestor.
+     */
     trackChrome: function(actor, params) {
         this._chrome.trackActor(actor, params);
     },
 
-    // untrackChrome:
-    // @actor: an actor previously tracked via trackChrome()
-    //
-    // Undoes the effect of trackChrome()
+    /**
+     * untrackChrome:
+     * @actor (Clutter.Actor): an actor previously tracked via trackChrome()
+     *
+     * Undoes the effect of trackChrome()
+     */
     untrackChrome: function(actor) {
         this._chrome.untrackActor(actor);
     },
 
-    // removeChrome:
-    // @actor: a chrome actor
-    //
-    // Removes @actor from the chrome
+    /**
+     * removeChrome:
+     * @actor (Clutter.Actor): a chrome actor
+     *
+     * Removes the actor from the chrome
+     */
     removeChrome: function(actor) {
         this._chrome.removeActor(actor);
     },
 
+    /**
+     * findMonitorForActor:
+     * @actor (Clutter.Actor): the actor to locate
+     * 
+     * Finds the monitor the actor is currently located on.
+     * If the actor is not found the primary monitor is returned.
+     * 
+     * Returns (Layout.Monitor): the monitor
+     */
     findMonitorForActor: function(actor) {
         return this._chrome.findMonitorForActor(actor);
     },
 
+    /**
+     * findMonitorIndexForActor
+     * @actor (Clutter.Actor): the actor to locate
+     *
+     * Finds the index of the monitor the actor is currently
+     * located on. If the actor is not found the primary monitor
+     * index is returned.
+     *
+     * Returns (number): the monitor index
+     */
     findMonitorIndexForActor: function(actor) {
         return this._chrome.findMonitorIndexForActor(actor);
     },
 
+    /**
+     * isTrackingChrome:
+     * @actor (Clutter.Actor): the actor to check
+     *
+     * Determines whether the actor is currently tracked or not.
+     *
+     * Returns (boolean): whether the actor is currently tracked
+     */
     isTrackingChrome: function(actor) {
         return this._chrome._findActor(actor) != -1;
     }
@@ -406,6 +456,25 @@ Signals.addSignalMethods(LayoutManager.prototype);
 // normal mode (ie, outside the Overview), that surrounds the main
 // workspace content.
 
+// this documents a non-existent object so we can document
+// supported params in a more complete/concise way than in the
+// individual function signatures.
+// keep this up to date with defaultParams/Chrome param support
+/**
+ * #ChromeParams
+ * @visibleInFullcreen (boolean): (optional) whether the actor should be hidden when its monitor is fullscreen. default false.
+ * @affectsStruts (boolean): (optional) whether the actor's affects its monitor's struts. default false.
+ * @affectsInputRegion (boolean): (optional) whether the actor should be added to the stage input region. default true.
+ * @addToWindowgroup (boolean): (optional) whether the actor should be treated as a top-level window. default false.
+ * @doNotAdd  (boolean): (optional) FIXME: unknown. default false.
+
+ * @short_description: Chrome actor parameters
+ *
+ * Note: This is not a prototype. You should not try to use this. This exists
+ * only to document the parameters that can be used with #Layout.addChrome and
+ * #Layout.trackChrome. You should instead construct it as a normal object literal:
+ * `{visibleInFullscreen: true}`
+ */
 const defaultParams = {
     visibleInFullscreen: false,
     affectsStruts: false,
@@ -424,6 +493,7 @@ Chrome.prototype = {
 
         this._monitors = [];
         this._inOverview = false;
+        this._isPopupWindowVisible = false;
         this._updateRegionIdle = 0;
         this._freezeUpdateCount = 0;
 
@@ -431,12 +501,16 @@ Chrome.prototype = {
 
         this._layoutManager.connect('monitors-changed',
                                     Lang.bind(this, this._relayout));
-        global.screen.connect('restacked',
-                              Lang.bind(this, this._windowsRestacked));
 
         // Need to update struts on new workspaces when they are added
         global.screen.connect('notify::n-workspaces',
                               Lang.bind(this, this._queueUpdateRegions));
+
+        global.screen.connect('restacked', Lang.bind(this, this._windowsRestacked));
+        global.screen.connect('in-fullscreen-changed',
+                              Lang.bind(this, this._updateVisibility));
+        global.window_manager.connect('switch-workspace',
+                                      Lang.bind(this, this._queueUpdateRegions));
 
         this._relayout();
     },
@@ -578,26 +652,23 @@ Chrome.prototype = {
                 visible = true;
             Main.uiGroup.set_skip_paint(actorData.actor, !visible);
         }
+        this._queueUpdateRegions();
     },
 
     _overviewShowing: function() {
         this._inOverview = true;
         this._updateVisibility();
-        this._queueUpdateRegions();
     },
 
     _overviewHidden: function() {
         this._inOverview = false;
         this._updateVisibility();
-        this._queueUpdateRegions();
     },
 
     _relayout: function() {
         this._monitors = this._layoutManager.monitors;
         this._primaryMonitor = this._layoutManager.primaryMonitor;
-        this._updateFullscreen();
         this._updateVisibility();
-        this._queueUpdateRegions();
     },
 
     _findMonitorForRect: function(x, y, w, h) {
@@ -643,7 +714,9 @@ Chrome.prototype = {
 
     findMonitorIndexForActor: function(actor) {
         let [index, monitor] = this.getMonitorInfoForActor(actor);
-        return index;
+        if (monitor)
+            return index;
+        return this._layoutManager._primaryIndex; // Not on any monitor, pretend its on the primary
     },
 
     _queueUpdateRegions: function() {
@@ -663,21 +736,9 @@ Chrome.prototype = {
         this._queueUpdateRegions();
     },
 
-    _updateFullscreen: function() {
-        this._updateVisibility();
-        this._queueUpdateRegions();
-    },
-
     _windowsRestacked: function() {
-        let changed = false;
-
         if (this._isPopupWindowVisible != global.top_window_group.get_children().some(isPopupMetaWindow))
-            changed = true;
-
-        if (changed) {
             this._updateVisibility();
-            this._queueUpdateRegions();
-        }
     },
 
     updateRegions: function() {
@@ -711,8 +772,8 @@ Chrome.prototype = {
             w = Math.round(w);
             h = Math.round(h);
 
-            if (actorData.affectsInputRegion
-                && wantsInputRegion
+            if (wantsInputRegion
+                && actorData.affectsInputRegion
                 && actorData.actor.get_paint_visibility()
                 && !Main.uiGroup.get_skip_paint(actorData.actor)) {
                 // If the actor is clipped, then we don't want the clipped off areas
