@@ -458,22 +458,21 @@ Signals.addSignalMethods(LayoutManager.prototype);
 
 // this documents a non-existent object so we can document
 // supported params in a more complete/concise way than in the
-// individual function signatures.
+// individual function docs.
 // keep this up to date with defaultParams/Chrome param support
 /**
  * #ChromeParams
- * @visibleInFullcreen (boolean): (optional) whether the actor should be hidden when its monitor is fullscreen. default false.
- * @affectsStruts (boolean): (optional) whether the actor's affects its monitor's struts. default false.
- * @affectsInputRegion (boolean): (optional) whether the actor should be added to the stage input region. default true.
- * @addToWindowgroup (boolean): (optional) whether the actor should be treated as a top-level window. default false.
- * @doNotAdd  (boolean): (optional) FIXME: unknown. default false.
+ * @visibleInFullcreen (boolean): (optional) The actor should be hidden when its monitor is fullscreen. Default %false.
+ * @affectsStruts (boolean): (optional) The actor's allocation should be used to add monitor struts. Default %false.
+ * @affectsInputRegion (boolean): (optional) The actor should be added to the stage input region. Default %true.
+ * @addToWindowgroup (boolean): (optional) The actor should be added as a top-level window. Default %false.
+ * @doNotAdd  (boolean): (optional) The actor should not be added to the uiGroup. This has no effect if %addToWindowgroup is %true. Default %false.
 
  * @short_description: Chrome actor parameters
  *
- * Note: This is not a prototype. You should not try to use this. This exists
- * only to document the parameters that can be used with #Layout.addChrome and
- * #Layout.trackChrome. You should instead construct it as a normal object literal:
- * `{visibleInFullscreen: true}`
+ * This is not a prototype. This exists only to document the parameters that can
+ * be used with #LayoutManager.addChrome and #LayoutManager.trackChrome. You can
+ * construct params as a normal object literal: `{visibleInFullscreen: true}`
  */
 const defaultParams = {
     visibleInFullscreen: false,
