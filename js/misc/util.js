@@ -10,8 +10,9 @@
  */
 
 const GLib = imports.gi.GLib;
-
+const Gio = imports.gi.Gio;
 const Main = imports.ui.main;
+const Config = imports.misc.config;
 
 // http://daringfireball.net/2010/07/improved_regex_for_matching_urls
 const _balancedParens = '\\((?:[^\\s()<>]+|(?:\\(?:[^\\s()<>]+\\)))*\\)';
@@ -357,4 +358,46 @@ function latinise(string){
         string = string.replace(_LATINISE_REGEX[i], i);
     }
     return string;
+}
+
+//[settings key, value type, <schema>, <rename-to>]
+const IMPORTANT_SETTINGS = [
+    ["panels-enabled", "strv"],
+    ["enabled-applets", "strv"],
+    ["enabled-desklets", "strv"],
+    ["enabled-extensions", "strv"],
+    ["enabled-search-providers", "strv"],
+    ["enable-indicators", "boolean"],
+    ["name", "string", "org.cinnamon.theme", "cinnamon theme"],
+    ["theme", "string", "org.cinnamon.desktop.wm.preferences", "wm theme"],
+    ["unredirect-fullscreen-windows", "boolean", "org.cinnamon.muffin"]
+];
+
+/**
+ * getDebugInfo:
+ *
+ * Returns (string): Returns a json-formatted string containing important
+ * cinnamon configuration information.
+ */
+function getDebugInfo() {
+    let out = {};
+    out["cinnamon version"] = Config.PACKAGE_VERSION;
+    out["important settings"] = {};
+    IMPORTANT_SETTINGS.forEach(function(s) {
+        let name = s[3] ? s[3] : s[0];
+        let val;
+        if (!s[2]) {
+            val = global.settings["get_" + s[1]](s[0]);
+        } else {
+            val = Gio.Settings.new(s[2])["get_" + s[1]](s[0]);
+        }
+        out["important settings"][name] = val;
+    });
+    out["primary-monitor"] =  Main.layoutManager.primaryIndex;
+    out["monitors"] = Main.layoutManager.monitors;
+    out["last 5 log errors"] = Main._errorLogStack.filter(item => item.category == "error")
+                                                  .map(item => item.message)
+                                                  .slice(-5);
+
+    return Main.formatLogArgument(out);
 }

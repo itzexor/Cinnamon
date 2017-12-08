@@ -1497,6 +1497,12 @@ SettingsLauncher.prototype = {
 function populateSettingsMenu(menu, panelId) {
 
     menu.troubleshootItem = new PopupMenu.PopupSubMenuMenuItem(_("Troubleshoot"));
+
+    menu.troubleshootItem.menu.addAction(_("Copy troubleshooting info"), function(event) {
+        let info_json = Util.getDebugInfo();
+        St.Clipboard.get_default().set_text(St.ClipboardType.CLIPBOARD, info_json);
+    });
+
     menu.troubleshootItem.menu.addAction(_("Restart Cinnamon"), function(event) {
         global.reexec_self();
     });
