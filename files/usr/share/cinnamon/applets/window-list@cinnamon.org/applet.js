@@ -84,9 +84,9 @@ WindowPreview.prototype = {
         this._applet = item._applet;
         this.uiScale = St.ThemeContext.get_for_stage(global.stage).scale_factor;
         this.thumbScale = previewScale;
-        this.metaWindow = metaWindow;
-        this.muffinWindow = null;
-        this._sizeChangedId = null;
+        this.muffinWindow = metaWindow.get_compositor_private();
+        this.thumbnail = null;
+        this._showTimer = null;
 
         this.actor = new St.BoxLayout({ vertical: true, style_class: "window-list-preview", important: true });
         this.actor.show_on_set_parent = false;
@@ -131,29 +131,20 @@ WindowPreview.prototype = {
     show: function() {
         if (!this.actor || this._applet._menuOpen)
             return;
+        if (this.thumbnail == null) {
+            let windowTexture = this.muffinWindow.get_texture();
+            let [width, height] = this._getScaledTextureSize(windowTexture);
 
-        this.muffinWindow = this.metaWindow.get_compositor_private();
-        let windowTexture = this.muffinWindow.get_texture();
-        let [width, height] = this._getScaledTextureSize(windowTexture);
-
-        if (this.thumbnail) {
-            this.thumbnailBin.set_child(null);
-            this.thumbnail.destroy();
+            this.thumbnail = new Clutter.Clone({
+                source: windowTexture,
+                width: width,
+                height: height
+            });
+            this.thumbnailBin.set_child(this.thumbnail);
+        } else {
+            let [width, height] = this._getScaledTextureSize(this.thumbnail.source)
+            this.thumbnail.set_size(width, height);
         }
-
-        this.thumbnail = new Clutter.Clone({
-            source: windowTexture,
-            width: width,
-            height: height
-        });
-
-        this._sizeChangedId = this.muffinWindow.connect('size-changed',
-            Lang.bind(this, function() {
-                let [width, height] = this._getScaledTextureSize(windowTexture);
-                this.thumbnail.set_size(width, height);
-            }));
-
-        this.thumbnailBin.set_child(this.thumbnail);
 
         let allocation = this.actor.get_allocation_box();
         let previewHeight = allocation.y2 - allocation.y1;
@@ -195,14 +186,6 @@ WindowPreview.prototype = {
     },
 
     hide: function() {
-        if (this._sizeChangedId != null) {
-            this.muffinWindow.disconnect(this._sizeChangedId);
-            this._sizeChangedId = null;
-        }
-        if (this.thumbnail) {
-            this.thumbnailBin.set_child(null);
-            this.thumbnail.destroy();
-        }
         if (this.actor) {
             this.actor.hide();
         }
@@ -214,18 +197,14 @@ WindowPreview.prototype = {
     },
 
     _destroy: function() {
-        if (this._sizeChangedId != null) {
-            this.muffinWindow.disconnect(this._sizeChangedId);
-            this.sizeChangedId = null;
-        }
         if (this.thumbnail) {
             this.thumbnailBin.set_child(null);
-            this.thumbnail.destroy();
+            this.thumbnail = null;
         }
         if (this.actor) {
             this.actor.destroy();
+            this.actor = null;
         }
-        this.actor = null;
     }
 };
 
