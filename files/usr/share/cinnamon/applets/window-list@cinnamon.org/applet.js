@@ -226,7 +226,6 @@ AppMenuButton.prototype = {
         this.metaWindow = metaWindow;
         this.alert = alert;
         this.labelVisible = false;
-        this._dndActivating = false;
         this._dndActivateSource = null;
         this._dndActivateId = 0;
         this.window_signals = new SignalManager.SignalManager(null);
@@ -449,8 +448,7 @@ AppMenuButton.prototype = {
          * image from Firefox to LibreOffice). However, if the target window is
          * hidden, they will drag to the AppWindowButton of the target window,
          * and we will open the window for them. */
-        if (!this._dndActivating) {
-            this._dndActivating = true;
+        if (!this._dndActivateId) {
             this._dndActivateSource = source;
             this._dndActivateId = Mainloop.timeout_add(500, Lang.bind(this, this._dndActivate));
             this.window_signals.connect(source, "drag-end", this._dndActivateDone, this);
@@ -465,6 +463,7 @@ AppMenuButton.prototype = {
             if (pickedActor.contains(this.actor) || this.actor.contains(pickedActor))
                 this._toggleWindow(true);
         }
+        this._dndActivateId = 0;
         this._dndActivateDone();
         return false;
     },

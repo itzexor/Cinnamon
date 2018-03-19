@@ -35,6 +35,7 @@ XdndHandler.prototype = {
         global.connect('xdnd-leave', Lang.bind(this, this._onLeave));
 
         this._windowGroupVisibilityHandlerId = 0;
+        this.lastPos = null;
     },
 
     // Called when the user cancels the drag (i.e release the button)
@@ -47,6 +48,7 @@ XdndHandler.prototype = {
             this._cursorWindowClone.destroy();
             this._cursorWindowClone = null;
         }
+        this.lastPos = null;
 
         this.emit('drag-end');
     },
@@ -89,6 +91,7 @@ XdndHandler.prototype = {
     },
 
     _onPositionChanged: function(obj, x, y) {
+        this.lastPos = [x,y];
         let pickedActor = global.stage.get_actor_at_pos(Clutter.PickMode.ALL, x, y);
 
         // Make sure that the cursor window is on top
