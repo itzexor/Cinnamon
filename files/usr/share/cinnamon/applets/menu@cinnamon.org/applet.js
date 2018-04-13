@@ -36,6 +36,15 @@ const USER_DESKTOP_PATH = FileUtils.getUserDesktopDir();
 const PRIVACY_SCHEMA = "org.cinnamon.desktop.privacy";
 const REMEMBER_RECENT_KEY = "remember-recent-files";
 
+const REFRESH_FLAGS = {
+    None:    0,
+    Apps:    1,
+    Favs:    2,
+    Places:  4,
+    Recent:  8,
+    All:    15
+};
+
 let appsys = Cinnamon.AppSystem.get_default();
 
 /* VisibleChildIterator takes a container (boxlayout, etc.)
@@ -1200,7 +1209,7 @@ MyApplet.prototype = {
 
         this.settings = new Settings.AppletSettings(this, "menu@cinnamon.org", instance_id);
 
-        this.settings.bind("show-places", "showPlaces", this._refreshBelowApps);
+        this.settings.bind("show-places", "showPlaces", () => this._queueRefresh(REFRESH_FLAGS.Places));
 
         this._appletEnterEventId = 0;
         this._appletLeaveEventId = 0;
@@ -1217,8 +1226,8 @@ MyApplet.prototype = {
         this.settings.bind("menu-icon", "menuIcon", this._updateIconAndLabel);
         this.settings.bind("menu-label", "menuLabel", this._updateIconAndLabel);
         this.settings.bind("overlay-key", "overlayKey", this._updateKeybinding);
-        this.settings.bind("show-category-icons", "showCategoryIcons", this._refreshAll);
-        this.settings.bind("show-application-icons", "showApplicationIcons", this._refreshAll);
+        this.settings.bind("show-category-icons", "showCategoryIcons", () => this._queueRefresh(REFRESH_FLAGS.All));
+        this.settings.bind("show-application-icons", "showApplicationIcons", () => this._queueRefresh(REFRESH_FLAGS.All));
         this.settings.bind("favbox-show", "favBoxShow", this._favboxtoggle);
         this.settings.bind("enable-animation", "enableAnimation", null);
 
@@ -1249,7 +1258,6 @@ MyApplet.prototype = {
         this._previousTreeSelectedActor = null;
         this._activeContainer = null;
         this._activeActor = null;
-        this._applicationsBoxWidth = 0;
         this.menuIsOpening = false;
         this._knownApps = []; // Used to keep track of apps that are already installed, so we can highlight newly installed ones
         this._appsWereRefreshed = false;
@@ -1261,29 +1269,68 @@ MyApplet.prototype = {
         this._activeContextMenuParent = null;
         this._activeContextMenuItem = null;
         this._display();
-        appsys.connect('installed-changed', Lang.bind(this, this.onAppSysChanged));
-        AppFavorites.getAppFavorites().connect('changed', Lang.bind(this, this._refreshFavs));
-        Main.placesManager.connect('places-updated', Lang.bind(this, this._refreshBelowApps));
-        this.RecentManager.connect('changed', Lang.bind(this, this._refreshRecent));
-        this.privacy_settings.connect("changed::" + REMEMBER_RECENT_KEY, Lang.bind(this, this._refreshRecent));
+        appsys.connect('installed-changed', () => this._queueRefresh(REFRESH_FLAGS.All, 1000));
+        AppFavorites.getAppFavorites().connect('changed', () => this._queueRefresh(REFRESH_FLAGS.Favs));
+        Main.placesManager.connect('places-updated', () => this._queueRefresh(REFRESH_FLAGS.Places));
+        this.RecentManager.connect('changed', () => this._queueRefresh(REFRESH_FLAGS.Recent));
+        this.privacy_settings.connect("changed::" + REMEMBER_RECENT_KEY, () => this._queueRefresh(REFRESH_FLAGS.Recent));
         this._fileFolderAccessActive = false;
         this._pathCompleter = new Gio.FilenameCompleter();
         this._pathCompleter.set_dirs_only(false);
         this.lastAcResults = [];
         this.settings.bind("search-filesystem", "searchFilesystem");
-        this.refreshing = false; // used as a flag to know if we're currently refreshing (so we don't do it more than once concurrently)
 
         this.recentContextMenu = null;
         this.appsContextMenu = null;
 
         this.lastSelectedCategory = null;
 
-        // We shouldn't need to call refreshAll() here... since we get a "icon-theme-changed" signal when CSD starts.
+        // We shouldn't need to call doRefresh() here... since we get a "icon-theme-changed" signal when CSD starts.
         // The reason we do is in case the Cinnamon icon theme is the same as the one specificed in GTK itself (in .config)
         // In that particular case we get no signal at all.
-        this._refreshAll();
+        this._refreshId = 0;
+        this._refreshFlags = REFRESH_FLAGS.All;
+        this._doRefresh();
 
         this.set_show_label_in_vertical_panels(false);
+    },
+
+    _queueRefresh: function(flags, delay=0) {
+        this._refreshFlags |= flags;
+        // if delay is set and a idle or timeout already exists, we restart it
+        if (this._refreshId && delay > 0) {
+            Mainloop.source_remove(this._refreshId);
+            this._refreshId = Mainloop.timeout_add(delay, this._doRefresh.bind(this));
+        } else if (!this._refreshId) {
+            this._refreshId = Mainloop.idle_add(this._doRefresh.bind(this));
+        }
+    },
+
+    _doRefresh: function() {
+        // apps, places, and recent all make child actors of the applications & categories boxes,
+        // in that order. if one changes, the ones below it need to be refreshed as well so they
+        // stay in the proper order.
+        this._refreshId = 0;
+        let flags = this._refreshFlags;
+
+        try {
+            if (flags & REFRESH_FLAGS.Apps)
+                this._refreshApps();
+            if (flags & REFRESH_FLAGS.Favs)
+                this._refreshFavs();
+            if (flags & REFRESH_FLAGS.Places || flags & REFRESH_FLAGS.Apps)
+                this._refreshPlaces();
+            if (flags & REFRESH_FLAGS.Recent || flags & REFRESH_FLAGS.Apps || flags & REFRESH_FLAGS.Places)
+                this._refreshRecent();
+
+            this._resizeApplicationsBox();
+        }
+        catch (exception) {
+            global.log(exception);
+        }
+
+        this._refreshFlags = REFRESH_FLAGS.None;
+        return false;
     },
 
     _updateKeybinding: function() {
@@ -1291,35 +1338,6 @@ MyApplet.prototype = {
             if (!Main.overview.visible && !Main.expo.visible)
                 this.menu.toggle_with_options(this.enableAnimation);
         }));
-    },
-
-    onAppSysChanged: function() {
-        if (this.refreshing == false) {
-            this.refreshing = true;
-            Mainloop.timeout_add_seconds(1, Lang.bind(this, this._refreshAll));
-        }
-    },
-
-    _refreshAll: function() {
-        try {
-            this._refreshApps();
-            this._refreshFavs();
-            this._refreshPlaces();
-            this._refreshRecent();
-
-            this._resizeApplicationsBox();
-        }
-        catch (exception) {
-            global.log(exception);
-        }
-        this.refreshing = false;
-    },
-
-    _refreshBelowApps: function() {
-        this._refreshPlaces();
-        this._refreshRecent();
-
-        this._resizeApplicationsBox();
     },
 
     openMenu: function() {
@@ -1383,7 +1401,7 @@ MyApplet.prototype = {
         this._display();
 
         if (this.initial_load_done)
-            this._refreshAll();
+            this._queueRefresh(REFRESH_FLAGS.All);
         this._updateIconAndLabel();
     },
 
@@ -2278,11 +2296,9 @@ MyApplet.prototype = {
         }
 
         this._setCategoriesButtonActive(!this.searchActive);
-
-        this._resizeApplicationsBox();
     },
 
-    _refreshRecent : function() {
+    _refreshRecent: function() {
         if (this.privacy_settings.get_boolean(REMEMBER_RECENT_KEY)) {
             if (this.recentButton == null) {
                 this.recentButton = new RecentCategoryButton(null, this.showCategoryIcons);
@@ -2500,8 +2516,6 @@ MyApplet.prototype = {
         }
 
         this._setCategoriesButtonActive(!this.searchActive);
-
-        this._resizeApplicationsBox();
     },
 
     _refreshApps : function() {
@@ -2523,7 +2537,6 @@ MyApplet.prototype = {
 
         this._transientButtons = [];
         this._applicationsButtonFromApp = {};
-        this._applicationsBoxWidth = 0;
 
         this._allAppsCategoryButton = new CategoryButton(null);
         this._addEnterEvent(this._allAppsCategoryButton, Lang.bind(this, function() {
@@ -3042,23 +3055,16 @@ MyApplet.prototype = {
         }
     },
 
-    _resize_actor_iter: function(actor) {
-        let [min, nat] = actor.get_preferred_width(-1.0);
-        if (nat > this._applicationsBoxWidth){
-            this._applicationsBoxWidth = nat;
-            this.applicationsBox.set_width(this._applicationsBoxWidth + 42); // The answer to life...
-        }
-    },
-
     _resizeApplicationsBox: function() {
-        this._applicationsBoxWidth = 0;
-        this.applicationsBox.set_width(-1);
+        let maxWidth = -1;
         let child = this.applicationsBox.get_first_child();
-        this._resize_actor_iter(child);
-
-        while ((child = child.get_next_sibling()) != null) {
-            this._resize_actor_iter(child);
+        while (child != null) {
+            let [min, nat] = child.get_preferred_width(-1.0);
+            if (nat > maxWidth)
+                maxWidth = nat;
+            child = child.get_next_sibling();
         }
+        this.applicationsBox.set_width(maxWidth + 42); // The answer to life...
     },
 
     _displayButtons: function(appCategory, places, recent, apps, autocompletes){
