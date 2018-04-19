@@ -35,6 +35,16 @@ var commandHeader = 'const Clutter = imports.gi.Clutter; ' +
                     'const r = Lang.bind(Main.lookingGlass, Main.lookingGlass.getResult); ';
 
 const HISTORY_KEY = 'looking-glass-history';
+
+const UNTRACKED_WINDOW_TYPES = [
+    Meta.WindowType.MENU,
+    Meta.WindowType.DROPDOWN_MENU,
+    Meta.WindowType.POPUP_MENU,
+    Meta.WindowType.TOOLTIP,
+    Meta.WindowType.DND,
+    Meta.WindowType.OVERRIDE_OTHER
+];
+
 function objectToString(o) {
     if (typeof(o) == typeof(objectToString)) {
         // special case this since the default is way, way too verbose
@@ -50,68 +60,69 @@ function WindowList() {
 
 WindowList.prototype = {
     _init : function () {
-        this.lastId = 0;
-        this.latestWindowList = [];
+        this._nextId = 1;
+        this._infos = new Map();
+        this._windows = new Map();
         
-        let tracker = Cinnamon.WindowTracker.get_default();
-        global.display.connect('window-created', Lang.bind(this, this._updateWindowList));
-        tracker.connect('tracked-windows-changed', Lang.bind(this, this._updateWindowList));
-    },
-    
-    getWindowById: function(id) {
-        let windows = global.get_window_actors();
-        for (let i = 0; i < windows.length; i++) {
-            let metaWindow = windows[i].metaWindow;
-            if(metaWindow._lgId === id)
-                return metaWindow;
-        }
-        return null;
+        this._tracker = Cinnamon.WindowTracker.get_default();
+        global.display.connect('window-created', Lang.bind(this, this._onWindowCreated));
+
+        for (let actor of global.get_window_actors())
+            this._onWindowCreated(null, actor.metaWindow);
     },
 
-    _updateWindowList: function() {
-        let windows = global.get_window_actors();
-        let tracker = Cinnamon.WindowTracker.get_default();
-        
-        let oldWindowList = this.latestWindowList;
-        this.latestWindowList = [];
-        for (let i = 0; i < windows.length; i++) {
-            let metaWindow = windows[i].metaWindow;
-            // Avoid multiple connections
-            if (!metaWindow._lookingGlassManaged) {
-                metaWindow.connect('unmanaged', Lang.bind(this, this._updateWindowList));
-                metaWindow._lookingGlassManaged = true;
-                
-                metaWindow._lgId = this.lastId;
-                this.lastId++;
-            }
-            
-            let lgInfo = { id: metaWindow._lgId.toString(), title: metaWindow.title, wmclass: metaWindow.get_wm_class(), app: ''};
-            
-            let app = tracker.get_window_app(metaWindow);
-            if (app != null && !app.is_window_backed()) {
-                lgInfo.app = app.get_id();
-            } else {
-                lgInfo.app = '<untracked>';
-            }
-            
-            // Ignore menus
-            let wtype = metaWindow.get_window_type();
-            if(wtype != Meta.WindowType.MENU && wtype != Meta.WindowType.DROPDOWN_MENU && wtype != Meta.WindowType.POPUP_MENU)
-                this.latestWindowList.push(lgInfo);
+    get latestWindowList() {
+        // returns an array of window info objects
+        return Array.from(this._infos.values());
+    },
+
+    getWindowById: function(id) {
+        // note: returns undefined instead of null now on not found
+        return this._windows.get(id);
+    },
+
+    _onWindowCreated: function(display, metaWindow) {
+        let wtype = metaWindow.get_window_type();
+        if (UNTRACKED_WINDOW_TYPES.includes(wtype))
+            return;
+
+        let id = this._nextId;
+        this._nextId++;
+
+        // note: all values of the info objects MUST be strings otherwise the dbus
+        // method call reply these are destined for will fail
+        let info = { id: id.toString(),
+                     title: objectToString(metaWindow.title),
+                     wmclass: objectToString(metaWindow.get_wm_class()) };
+
+        let app = this._tracker.get_window_app(metaWindow);
+        if (app != null && !app.is_window_backed()) {
+            info.app = objectToString(app.get_id());
+        } else {
+            info.app = '<untracked>';
         }
-        
-        // Make sure the list changed before notifying listeneres
-        let changed = oldWindowList.length != this.latestWindowList.length;
-        if(!changed) {
-            for(let i=0; i<oldWindowList.length; i++) {
-                if(oldWindowList[i].id != this.latestWindowList[i].id) {
-                    changed = true;
-                    break;
-                }
-            }
-        }
-        if(changed)
+
+        this._windows.set(id, metaWindow);
+        this._infos.set(id, info);
+
+        metaWindow._lgId = id;
+        metaWindow._lgUnmanageId = metaWindow.connect('unmanaged', () => { this._onWindowDeleted(metaWindow, id); });
+
+        // if display == null then it's the initial refresh
+        if (display != null)
             Main.createLookingGlass().emitWindowListUpdate();
+    },
+
+    _onWindowDeleted: function(metaWindow, id) {
+        metaWindow.disconnect(metaWindow._lgUnmanageId);
+
+        this._infos.delete(id);
+        this._windows.delete(id);
+
+        delete metaWindow._lgId;
+        delete metaWindow._lgUnmanageId;
+
+        Main.createLookingGlass().emitWindowListUpdate();
     }
 };
 Signals.addSignalMethods(WindowList.prototype);
