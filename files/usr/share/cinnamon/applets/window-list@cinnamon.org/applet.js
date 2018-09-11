@@ -72,15 +72,48 @@ const FLASH_INTERVAL = 500;
 const WINDOW_PREVIEW_WIDTH = 200;
 const WINDOW_PREVIEW_HEIGHT = 150;
 
-class WindowPreview extends Tooltips.TooltipBase {
-    constructor(item, metaWindow, previewScale, showLabel) {
-        super(item.actor);
-        this._applet = item._applet;
-        this.uiScale = St.ThemeContext.get_for_stage(global.stage).scale_factor;
-        this.thumbScale = previewScale;
-        this.metaWindow = metaWindow;
-        this.muffinWindow = null;
-        this._sizeChangedId = null;
+class DummyTooltip extends Tooltips.TooltipBase {
+    constructor(appMenuButton, windowPreview) {
+        super(appMenuButton.actor);
+        this._source = appMenuButton;
+        this._preview = windowPreview;
+        this._text = "";
+    }
+
+    _onEnterEvent(actor, event) {
+        if (this._source._applet._tooltipShowing) {
+            this.mousePosition = event.get_coords();
+            this.show();
+        } else {
+            super._onEnterEvent(actor, event);
+        }
+    }
+
+    show() {
+        this._preview.show(this._source, this._text);
+    }
+
+    hide() {
+        this._preview.hide(this._source);
+    }
+
+    set_text(text) {
+        this._text = text;
+        this._preview.set_text(this._source, text);
+    }
+
+    _destroy() {
+        this.hide();
+        this._source = null;
+        this._preview = null;
+    }
+}
+
+class WindowPreview {
+    constructor(applet) {
+        this._applet = applet;
+        this._source = null;
+        this._uiScale = St.ThemeContext.get_for_stage(global.stage).scale_factor;
 
         this.actor = new St.BoxLayout({ vertical: true, style_class: "window-list-preview", important: true });
         this.actor.show_on_set_parent = false;
@@ -88,66 +121,43 @@ class WindowPreview extends Tooltips.TooltipBase {
 
         this.label = new St.Label();
         this.labelBin = new St.Bin({ y_align: St.Align.MIDDLE });
-        this.labelBin.set_width(WINDOW_PREVIEW_WIDTH * this.thumbScale * this.uiScale);
         this.labelBin.add_actor(this.label);
         this.actor.add_actor(this.labelBin);
-
-        if (!showLabel) {
-            this.labelBin.hide();
-        }
 
         this.thumbnailBin = new St.Bin();
         this.actor.add_actor(this.thumbnailBin);
     }
 
-    _onEnterEvent(actor, event) {
-        if (this._applet._tooltipShowing)
-            this.show();
-        else if (!this._showTimer)
-            this._showTimer = Mainloop.timeout_add(300, Lang.bind(this, this._onShowTimerComplete));
-
-        this.mousePosition = event.get_coords();
+    hide(source) {
+        if (this._source === source || this._source == null) {
+            this._source = null;
+            this.thumbnailBin.set_child(null);
+            this.actor.hide();
+            this.visible = false;
+            this._applet.erodeTooltip();
+        }
     }
 
-    _getScaledTextureSize(windowTexture) {
-        let [width, height] = windowTexture.get_size();
-        let scale = this.thumbScale * this.uiScale *
-                    Math.min(WINDOW_PREVIEW_WIDTH / width, WINDOW_PREVIEW_HEIGHT / height);
-        return [ width * scale,
-                 height * scale ];
-    }
-
-    _hide(actor, event) {
-        Tooltips.TooltipBase.prototype._hide.call(this, actor, event);
-        this._applet.erodeTooltip();
-    }
-
-    show() {
-        if (!this.actor || this._applet._menuOpen)
+    show(source, text) {
+        if (!source || !source.actor || this._source === source || this._applet._menuOpen)
             return;
 
-        this.muffinWindow = this.metaWindow.get_compositor_private();
-        let windowTexture = this.muffinWindow.get_texture();
-        let [width, height] = this._getScaledTextureSize(windowTexture);
+        this._source = source;
+        this.label.set_text(text);
 
-        if (this.thumbnail) {
-            this.thumbnailBin.set_child(null);
-            this.thumbnail.destroy();
-        }
+        this.labelBin.set_width(WINDOW_PREVIEW_WIDTH * this._applet.previewScale * this._uiScale);
+        this.label.visible = this._applet.showLabel;
 
-        this.thumbnail = new Clutter.Clone({
-            source: windowTexture,
-            width: width,
-            height: height
-        });
+        let windowTexture = source.metaWindow.get_compositor_private().get_texture();
+        let [tWidth, tHeight] = windowTexture.get_size();
 
-        this._sizeChangedId = this.muffinWindow.connect('size-changed', () => {
-            let [width, height] = this._getScaledTextureSize(windowTexture);
-            this.thumbnail.set_size(width, height);
-            this._set_position();
-        });
+        let scale = Math.min(WINDOW_PREVIEW_WIDTH / tWidth, WINDOW_PREVIEW_HEIGHT / tHeight)
+                    * this._applet.previewScale
+                    * this._uiScale;
 
-        this.thumbnailBin.set_child(this.thumbnail);
+        let thumbnail = new Clutter.Clone({ source: windowTexture });
+        this.thumbnailBin.set_child(thumbnail);
+        thumbnail.set_size(scale * tWidth, scale * tHeight);
 
         this.actor.show();
         this._set_position();
@@ -157,45 +167,30 @@ class WindowPreview extends Tooltips.TooltipBase {
         this._applet._tooltipShowing = true;
     }
 
-    hide() {
-        if (this._sizeChangedId != null) {
-            this.muffinWindow.disconnect(this._sizeChangedId);
-            this._sizeChangedId = null;
-        }
-        if (this.thumbnail) {
-            this.thumbnailBin.set_child(null);
-            this.thumbnail.destroy();
-        }
-        if (this.actor) {
-            this.actor.hide();
-        }
-        this.visible = false;
-    }
-
     _set_position() {
         let allocation = this.actor.get_allocation_box();
         let previewHeight = allocation.y2 - allocation.y1;
         let previewWidth = allocation.x2 - allocation.x1;
 
-        let monitor = Main.layoutManager.findMonitorForActor(this.item);
+        let monitor = Main.layoutManager.findMonitorForActor(this._source.actor);
 
         let previewTop;
-        if (this._applet.orientation === St.Side.BOTTOM) {
-            previewTop = this.item.get_transformed_position()[1] - previewHeight - 5;
+        if (this._source._applet.orientation === St.Side.BOTTOM) {
+            previewTop = this._source.actor.get_transformed_position()[1] - previewHeight - 5;
         } else if (this._applet.orientation === St.Side.TOP) {
-            previewTop = this.item.get_transformed_position()[1] + this.item.get_transformed_size()[1] + 5;
+            previewTop = this._source.actor.get_transformed_position()[1] + this._source.actor.get_transformed_size()[1] + 5;
         } else {
-            previewTop = this.item.get_transformed_position()[1];
+            previewTop = this._source.actor.get_transformed_position()[1];
         }
 
         let previewLeft;
         if (this._applet.orientation === St.Side.BOTTOM || this._applet.orientation === St.Side.TOP) {
             // centre the applet on the window list item if window list is on the top or bottom panel
-            previewLeft = this.item.get_transformed_position()[0] + this.item.get_transformed_size()[0]/2 - previewWidth/2;
+            previewLeft = this._source.actor.get_transformed_position()[0] + this._source.actor.get_transformed_size()[0]/2 - previewWidth/2;
         } else if (this._applet.orientation === St.Side.LEFT) {
-            previewLeft = this.item.get_transformed_position()[0] + this.item.get_transformed_size()[0] + 5;
+            previewLeft = this._source.actor.get_transformed_position()[0] + this._source.actor.get_transformed_size()[0] + 5;
         } else {
-            previewLeft = this.item.get_transformed_position()[0] - previewWidth - 5;
+            previewLeft = this._source.actor.get_transformed_position()[0] - previewWidth - 5;
         }
 
         previewLeft = Math.round(previewLeft);
@@ -208,19 +203,13 @@ class WindowPreview extends Tooltips.TooltipBase {
         this.actor.set_position(previewLeft, previewTop);
     }
 
-    set_text(text) {
-        this.label.set_text(text);
+    set_text(source, text) {
+        if (this._source === source)
+            this.label.set_text(text);
     }
 
     _destroy() {
-        if (this._sizeChangedId != null) {
-            this.muffinWindow.disconnect(this._sizeChangedId);
-            this.sizeChangedId = null;
-        }
-        if (this.thumbnail) {
-            this.thumbnailBin.set_child(null);
-            this.thumbnail.destroy();
-        }
+        this.thumbnailBin.set_child(null);
         if (this.actor) {
             this.actor.destroy();
         }
@@ -308,7 +297,7 @@ class AppMenuButton {
 
         /* TODO: this._progressPulse = this.metaWindow.progress_pulse; */
 
-        this.onPreviewChanged();
+        this.onUsePreviewChanged();
 
         if (!this.alert) {
             this._menuManager = new PopupMenu.PopupMenuManager(this);
@@ -350,12 +339,12 @@ class AppMenuButton {
         this._windows.splice(this._windows.indexOf(this), 1);
     }
 
-    onPreviewChanged() {
+    onUsePreviewChanged() {
         if (this._tooltip)
             this._tooltip.destroy();
 
         if (this._applet.usePreview)
-            this._tooltip = new WindowPreview(this, this.metaWindow, this._applet.previewScale, this._applet.showLabel);
+            this._tooltip = new DummyTooltip(this, this._applet._preview);
         else
             this._tooltip = new Tooltips.PanelItemTooltip(this, "", this._applet.orientation);
 
@@ -983,6 +972,7 @@ class CinnamonWindowListApplet extends Applet.Applet {
         this._urgentSignal = null;
         this._windows = [];
         this._monitorWatchList = [];
+        this._preview = new WindowPreview(this);
 
         this.settings = new Settings.AppletSettings(this, "window-list@cinnamon.org", this.instance_id);
 
@@ -992,9 +982,9 @@ class CinnamonWindowListApplet extends Applet.Applet {
         this.settings.bind("reverse-scrolling", "reverseScroll");
         this.settings.bind("middle-click-close", "middleClickClose");
         this.settings.bind("buttons-use-entire-space", "buttonsUseEntireSpace", this._refreshAllItems);
-        this.settings.bind("window-preview", "usePreview", this._onPreviewChanged);
-        this.settings.bind("window-preview-show-label", "showLabel", this._onPreviewChanged);
-        this.settings.bind("window-preview-scale", "previewScale", this._onPreviewChanged);
+        this.settings.bind("window-preview", "usePreview", this._onUsePreviewChanged);
+        this.settings.bind("window-preview-show-label", "showLabel");
+        this.settings.bind("window-preview-scale", "previewScale");
 
         this.signals.connect(global.screen, 'window-added', this._onWindowAddedAsync, this);
         this.signals.connect(global.screen, 'window-monitor-changed', this._onWindowMonitorChanged, this);
@@ -1136,9 +1126,9 @@ class CinnamonWindowListApplet extends Applet.Applet {
             window.onScrollModeChanged();
     }
 
-    _onPreviewChanged() {
+    _onUsePreviewChanged() {
         for (let window of this._windows)
-            window.onPreviewChanged();
+            window.onUsePreviewChanged();
     }
 
     _onWindowDemandsAttention (display, window) {
