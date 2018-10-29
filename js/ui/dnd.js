@@ -755,21 +755,26 @@ GenericDragItemContainer.prototype = {
         this.actor.add_actor(this.child);
     },
 
-    animateIn: function() {
+    animateIn: function(animDoneFunc) {
         if (this.child == null)
             return;
 
         this.childScale = 0;
         this.childOpacity = 0;
+
         Tweener.addTween(this,
                          { childScale: 1.0,
                            childOpacity: 255,
                            time: DND_ANIMATION_TIME,
-                           transition: 'easeOutQuad'
+                           transition: 'easeOutQuad',
+                           onComplete: () => {
+                               if (typeof animDoneFunc === 'function')
+                                   animDoneFunc();
+                           }
                          });
     },
 
-    animateOutAndDestroy: function() {
+    animateOutAndDestroy: function(animDoneFunc) {
         if (this.child == null) {
             this.actor.destroy();
             return;
@@ -782,9 +787,11 @@ GenericDragItemContainer.prototype = {
                            childOpacity: 0,
                            time: DND_ANIMATION_TIME,
                            transition: 'easeOutQuad',
-                           onComplete: Lang.bind(this, function() {
+                           onComplete: () => {
                                this.actor.destroy();
-                           })
+                               if (typeof animDoneFunc === 'function')
+                                   animDoneFunc();
+                           }
                          });
     },
 
