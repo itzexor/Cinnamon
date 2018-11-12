@@ -99,6 +99,100 @@ class VisibleChildIterator {
     }
 }
 
+// blocks child reactivity on a container while the mouse is moving
+// more rightwards than up/down. any left movement uninhibits.
+class SelectionInhibitor {
+    constructor() {
+        this._timeoutId = 0;
+        this._averageSlope = 0;
+        this._inhibited = false;
+        this._container = null;
+        this._bounds = null;
+        this._lastPos = null;
+    }
+
+    start() {
+        if (!this._container)
+            return;
+
+        if (!this._timeoutId) {
+            this._bounds = Cinnamon.util_get_transformed_allocation(this._container);
+            this._timeoutId = Mainloop.timeout_add(50, this._trackMouse.bind(this));
+        }
+
+        this._setInhibited(true);
+    }
+
+    stop() {
+        if (this._timeoutId)
+            Mainloop.source_remove(this._timeoutId);
+
+        this._timeoutId = 0;
+        this._bounds = null;
+        this._setInhibited(false);
+    }
+
+    setContainer(container) {
+        this.stop();
+        this._container = container;
+    }
+
+    _setInhibited(state) {
+        if (state == this._inhibited || !this._container)
+            return;
+
+        this._inhibited = state;
+        this._container.get_children().forEach(c => c.set_reactive(!state));
+
+        if (state) {
+            let [mx, my, ] = global.get_pointer();
+            this._lastPos = { x: mx, y: my };
+        } else {
+            this._averageSlope = 0;
+        }
+    }
+
+    _trackMouse() {
+        if (!this._timeoutId)
+            return false;
+
+        let [mx, my, ] = global.get_pointer();
+        if (!this._bounds.contains(mx, my)) {
+            this.stop();
+            return false;
+        }
+
+        if (this._inhibited) {
+            let dx = mx - this._lastPos.x;
+            let dy = Math.abs(my - this._lastPos.y);
+
+            if (dx > 0 && dy > 0) {
+                // moving up/right or down/right
+                if (this._averageSlope === 0) {
+                    this._averageSlope = dy / dx;
+                } else {
+                    this._averageSlope += dy / dx;
+                    this._averageSlope /= 2;
+                }
+            } else if (dy > 0 && dx === 0) {
+                // moving directly up or down
+                this._averageSlope += dy;
+            } else {
+                // moving left or not moving at all
+                this._averageSlope = 0;
+                this._setInhibited(false);
+            }
+
+            // approx 4 pixels straight up or down, or moving up/down 3.5 pixels per 1 right
+            // basically it's what "feels right" with my weird algorithm.
+            if (this._averageSlope > 3.5)
+                this._setInhibited(false);
+        }
+        this._lastPos = { x: mx, y: my };
+        return true;
+    }
+}
+
 class ApplicationContextMenuItem extends PopupMenu.PopupBaseMenuItem {
     constructor(appButton, label, action, iconName) {
         super({focusOnHover: false});
@@ -1154,6 +1248,7 @@ class CinnamonMenuApplet extends Applet.TextIconApplet {
         this.noRecentDocuments = true;
         this._activeContextMenuParent = null;
         this._activeContextMenuItem = null;
+        this.selectionInhibitor = new SelectionInhibitor();
         this._display();
         appsys.connect('installed-changed', Lang.bind(this, this.onAppSysChanged));
         AppFavorites.getAppFavorites().connect('changed', Lang.bind(this, this._refreshFavs));
@@ -1361,7 +1456,7 @@ class CinnamonMenuApplet extends Applet.TextIconApplet {
 
             this._clearAllSelections(true);
             this._scrollToButton(this.favBoxIter.getFirstVisible()._delegate, this.favoritesScrollBox);
-            this.destroyVectorBox();
+            this.selectionInhibitor.stop();
         }
     }
 
@@ -2061,101 +2156,6 @@ class CinnamonMenuApplet extends Applet.TextIconApplet {
         }
     }
 
-    /*
-     * The vectorBox overlays the the categoriesBox to aid in navigation from categories to apps
-     * by preventing misselections. It is set to the same size as the categoriesOverlayBox and
-     * categoriesBox.
-     *
-     * The actor is a quadrilateral that we turn into a triangle by setting the A and B vertices to
-     * the same position. The size and origin of the vectorBox are calculated in _getVectorInfo().
-     * Using those properties, the bounding box is sized as (w, h) and the triangle is defined as
-     * follows:
-     *   _____
-     *  |    /|D
-     *  |   / |     AB: (mx, my)
-     *  | A/  |      C: (w, h)
-     *  | B\  |      D: (w, 0)
-     *  |   \ |
-     *  |____\|C
-     */
-
-    _getVectorInfo() {
-        let [mx, my, mask] = global.get_pointer();
-        let [bx, by] = this.categoriesOverlayBox.get_transformed_position();
-        let [bw, bh] = this.categoriesOverlayBox.get_transformed_size();
-
-        let xformed_mx = mx - bx;
-        let xformed_my = my - by;
-
-        if (xformed_mx < 0 || xformed_mx > bw || xformed_my < 0 || xformed_my > bh) {
-            return null;
-        }
-
-        return { mx: xformed_mx,
-                 my: xformed_my,
-                 w: bw,
-                 h: bh };
-    }
-
-    makeVectorBox(actor) {
-        this.destroyVectorBox(actor);
-        let vi = this._getVectorInfo();
-        if (!vi) {
-            return;
-        }
-
-        this.vectorBox = new St.Polygon({ debug: false, width: vi.w -1, height: vi.h,
-                                          ulc_x: vi.mx, ulc_y: vi.my,
-                                          llc_x: vi.mx, llc_y: vi.my,
-                                          urc_x: vi.w, urc_y: 0,
-                                          lrc_x: vi.w, lrc_y: vi.h });
-
-        this.categoriesOverlayBox.add_actor(this.vectorBox);
-
-        this.vectorBox.show();
-        this.vectorBox.set_reactive(true);
-
-        this.vectorBox.connect("leave-event", Lang.bind(this, this.destroyVectorBox));
-        this.vectorBox.connect("motion-event", Lang.bind(this, this.maybeUpdateVectorBox));
-        this.actor_motion_id = actor.connect("motion-event", Lang.bind(this, this.maybeUpdateVectorBox));
-        this.current_motion_actor = actor;
-    }
-
-    maybeUpdateVectorBox() {
-        if (this.vector_update_loop) {
-            Mainloop.source_remove(this.vector_update_loop);
-            this.vector_update_loop = 0;
-        }
-        this.vector_update_loop = Mainloop.timeout_add(50, Lang.bind(this, this.updateVectorBox));
-    }
-
-    updateVectorBox(actor) {
-        if (this.vectorBox) {
-            let vi = this._getVectorInfo();
-            if (vi) {
-                this.vectorBox.ulc_x = vi.mx;
-                this.vectorBox.llc_x = vi.mx;
-                this.vectorBox.queue_repaint();
-            } else {
-                this.destroyVectorBox(actor);
-            }
-        }
-        this.vector_update_loop = 0;
-        return false;
-    }
-
-    destroyVectorBox(actor) {
-        if (this.vectorBox != null) {
-            this.vectorBox.destroy();
-            this.vectorBox = null;
-        }
-        if (this.actor_motion_id > 0 && this.current_motion_actor != null) {
-            this.current_motion_actor.disconnect(this.actor_motion_id);
-            this.actor_motion_id = 0;
-            this.current_motion_actor = null;
-        }
-    }
-
     _refreshPlaces () {
         for (let i = 0; i < this._placesButtons.length; i ++) {
             this._placesButtons[i].actor.destroy();
@@ -2184,7 +2184,7 @@ class CinnamonMenuApplet extends Applet.TextIconApplet {
                     this.closeContextMenus(null, false);
                     this._select_category("places");
 
-                    this.makeVectorBox(this.placesButton.actor);
+                    this.selectionInhibitor.start();
                 }
             }));
             this.placesButton.actor.connect('leave-event', Lang.bind(this, function () {
@@ -2258,7 +2258,7 @@ class CinnamonMenuApplet extends Applet.TextIconApplet {
                         this.closeContextMenus(null, false);
                         this._select_category("recent");
 
-                        this.makeVectorBox(this.recentButton.actor);
+                        this.selectionInhibitor.start();
                     }
                 }));
                 this.recentButton.actor.connect('leave-event', Lang.bind(this, function () {
@@ -2495,7 +2495,7 @@ class CinnamonMenuApplet extends Applet.TextIconApplet {
                 this._allAppsCategoryButton.actor.style_class = "menu-category-button-selected";
                 this._select_category(null);
 
-                this.makeVectorBox(this._allAppsCategoryButton.actor);
+                this.selectionInhibitor.start();
             }
         }));
         this._allAppsCategoryButton.actor.connect('leave-event', Lang.bind(this, function () {
@@ -2560,7 +2560,7 @@ class CinnamonMenuApplet extends Applet.TextIconApplet {
                         categoryButton.actor.style_class = "menu-category-button-selected";
                         this._select_category(dir.get_menu_id());
 
-                        this.makeVectorBox(categoryButton.actor);
+                        this.selectionInhibitor.start();
                     }
                 });
             };
@@ -2862,10 +2862,6 @@ class CinnamonMenuApplet extends Applet.TextIconApplet {
     _display() {
         this._activeContainer = null;
         this._activeActor = null;
-        this.vectorBox = null;
-        this.actor_motion_id = 0;
-        this.vector_update_loop = null;
-        this.current_motion_actor = null;
         let section = new PopupMenu.PopupMenuSection();
         this.menu.addMenuItem(section);
 
@@ -2899,11 +2895,10 @@ class CinnamonMenuApplet extends Applet.TextIconApplet {
         rightPane.add_actor(this.searchBox);
         rightPane.add_actor(this.categoriesApplicationsBox.actor);
 
-        this.categoriesOverlayBox = new Clutter.Actor();
         this.categoriesBox = new St.BoxLayout({ style_class: 'menu-categories-box',
                                                 vertical: true,
                                                 accessible_role: Atk.Role.LIST });
-        this.categoriesOverlayBox.add_actor(this.categoriesBox);
+        this.selectionInhibitor.setContainer(this.categoriesBox);
 
         this.applicationsScrollBox = new St.ScrollView({ x_fill: true, y_fill: false, y_align: St.Align.START, style_class: 'vfade menu-applications-scrollbox' });
         this.favoritesScrollBox = new St.ScrollView({
@@ -2937,7 +2932,7 @@ class CinnamonMenuApplet extends Applet.TextIconApplet {
         this.applicationsBox.add_style_class_name('menu-applications-box'); //this is to support old themes
         this.applicationsScrollBox.add_actor(this.applicationsBox);
         this.applicationsScrollBox.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC);
-        this.categoriesApplicationsBox.actor.add_actor(this.categoriesOverlayBox);
+        this.categoriesApplicationsBox.actor.add_actor(this.categoriesBox);
         this.categoriesApplicationsBox.actor.add_actor(this.applicationsScrollBox);
 
         this.favoritesBox = new FavoritesBox().actor;
