@@ -149,6 +149,7 @@ var _Draggable = new Lang.Class({
 
     _grabActor: function() {
         Clutter.grab_pointer(this.actor);
+        global.set_stage_input_mode(Cinnamon.StageInputMode.FULLSCREEN);
         this._onEventId = this.actor.connect('event',
                                              Lang.bind(this, this._onEvent));
     },
@@ -158,6 +159,7 @@ var _Draggable = new Lang.Class({
             return;
 
         Clutter.ungrab_pointer();
+        global.set_stage_input_mode(Cinnamon.StageInputMode.NORMAL);
         this.actor.disconnect(this._onEventId);
         this._onEventId = null;
     },
