@@ -423,7 +423,9 @@ var _Draggable = new Lang.Class({
                                                              this._dragActor,
                                                              targX,
                                                              targY,
-                                                             0);
+                                                             0,
+                                                             x,
+                                                             y);
                 if (result == DragMotionResult.MOVE_DROP || result == DragMotionResult.COPY_DROP) {
                     if (target._delegate.handleDragOut) this.recentDropTarget = target;
                     break;

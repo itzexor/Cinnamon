@@ -148,7 +148,7 @@ class PanelAppLauncher extends DND.LauncherDraggable {
         this._draggable = DND.makeDraggable(this.actor);
 
         this._signals.connect(this._draggable, 'drag-begin', Lang.bind(this, this._onDragBegin));
-        this._signals.connect(this._draggable, 'drag-cancelled', Lang.bind(this, this._onDragEnd));
+        this._signals.connect(this._draggable, 'drag-cancelled', Lang.bind(this, this._onDragCancelled));
         this._signals.connect(this._draggable, 'drag-end', Lang.bind(this, this._onDragEnd));
 
         this._updateInhibit();
@@ -156,23 +156,41 @@ class PanelAppLauncher extends DND.LauncherDraggable {
         this._signals.connect(global.settings, 'changed::' + PANEL_EDIT_MODE_KEY, Lang.bind(this, this._updateInhibit));
     }
 
+    _unparentForDrag() {
+        if (this._originalIndex != -1)
+            return;
+        this._originalIndex = this.actor.get_parent().get_children().indexOf(this.actor);
+        log(`unparent from ${this._originalIndex}`)
+        this.actor.get_parent().remove_child(this.actor);
+        this.launchersBox.createDragPlaceholder(this._originalIndex, true);
+    }
+
+    _reparentForDrag() {
+        log(`reparent to ${this._originalIndex}`)
+        if (this._originalIndex == -1)
+            return;
+        this.launchersBox.reinsertAtIndex(this, this._originalIndex)
+        this._originalIndex = -1;
+    }
+
     _onDragBegin() {
+        this._unparentForDrag();
         this._dragging = true;
         this._tooltip.hide();
         this._tooltip.preventShow = true;
-        this._originalIndex = this.launchersBox.myactor.get_children().indexOf(this.actor);
-        this.actor.unparent();
-        this.launchersBox._createDragPlaceholder(this._originalIndex, true);
-        this.actor.set_hover(false);
+    }
+
+    _onDragCancelled(source, time) {
+        this._applet._clearDragPlaceholder(true);
+        this._reparentForDrag();
     }
 
     _onDragEnd(source, time, success) {
         this._dragging = false;
         this._tooltip.preventShow = false;
-        this._applet._clearDragPlaceholder();
-        if (!success)
-            this.launchersBox.myactor.insert_child_at_index(this.actor, this._originalIndex)
-        this._originalIndex = -1;
+        this._applet._clearDragPlaceholder(true);
+        if (success)
+            this._reparentForDrag();
     }
 
     _updateInhibit() {
@@ -386,7 +404,6 @@ class CinnamonPanelLaunchersApplet extends Applet.Applet {
 
     _move_launcher_in_proxy(launcher, new_index) {
         let proxy_member;
-
         for (let i = 0; i < this._settings_proxy.length; i++) {
             if (this._settings_proxy[i].launcher == launcher) {
                 proxy_member = this._settings_proxy.splice(i, 1)[0];
@@ -397,19 +414,23 @@ class CinnamonPanelLaunchersApplet extends Applet.Applet {
         if (!proxy_member)
             return;
 
+        this._insert_proxy_member(proxy_member, new_index);
+    }
+
+    _insert_proxy_member(member, index) {
         let j = -1;
         for (let i = 0; i < this._settings_proxy.length; i++) {
             if (this._settings_proxy[i].valid) {
                 j++;
-                if (j == new_index) {
-                    this._settings_proxy.splice(i, 0, proxy_member);
+                if (j == index) {
+                    this._settings_proxy.splice(i, 0, member);
                     return;
                 }
             }
         }
 
-        if (new_index == j + 1)
-            this._settings_proxy.push(proxy_member);
+        if (index == j + 1)
+            this._settings_proxy.push(member);
     }
 
     loadSingleApp(path) {
@@ -501,16 +522,27 @@ class CinnamonPanelLaunchersApplet extends Applet.Applet {
 
         this.myactor.insert_child_at_index(newLauncher.actor, position);
         this._launchers.splice(position, 0, newLauncher);
-        this._settings_proxy.splice(position, 0, { file: path, valid: true, launcher: newLauncher });
+        this._insert_proxy_member({ file: path, valid: true, launcher: newLauncher }, position);
         this.sync_settings_proxy_to_settings();
     }
 
-    _insertAtNewIndex(launcher, oldIndex, newIndex) {
+    reinsertAtIndex(launcher, newIndex) {
+        let oldIndex = launcher._originalIndex;
+        if (oldIndex == -1)
+            return;
+
         this.myactor.insert_child_at_index(launcher.actor, newIndex);
-        this._launchers.splice(oldIndex, 1);
-        this._launchers.splice(newIndex, 0, launcher);
-        this._move_launcher_in_proxy(launcher, newIndex);
-        this.sync_settings_proxy_to_settings();
+
+        if (oldIndex < newIndex)
+            newIndex--;
+
+        // move the launcher and settings objects
+        if (oldIndex != newIndex) {
+            this._launchers.splice(oldIndex, 1);
+            this._launchers.splice(newIndex, 0, launcher);
+            this._move_launcher_in_proxy(launcher, newIndex);
+            this.sync_settings_proxy_to_settings();
+        }
     }
 
     showAddLauncherDialog(timestamp, launcher){
@@ -521,11 +553,15 @@ class CinnamonPanelLaunchersApplet extends Applet.Applet {
         }
     }
 
-    _createDragPlaceholder(index, skipAnimation=false) {
+    createDragPlaceholder(index, skipAnimation=false) {
+        if (this._dragPlaceholder)
+            return;
+
         this._dragPlaceholder = new DND.GenericDragPlaceholderItem();
         this._dragPlaceholder.child.set_size(this.icon_size, this.icon_size);
         this.myactor.insert_child_at_index(this._dragPlaceholder.actor, index);
         this._dragPlaceholderIndex = index;
+
         if (!skipAnimation) {
             this._dragAnimating = true;
             this._dragPlaceholder.animateIn(() => this._dragAnimating = false);
@@ -559,16 +595,24 @@ class CinnamonPanelLaunchersApplet extends Applet.Applet {
             return DND.DragMotionResult.CONTINUE;
 
         let vertical = this.myactor.height > this.myactor.width;
-        let mPos = vertical ? y : x;
-        let boxSize = vertical ? this.myactor.height : this.myactor.width;
+
+        // dnd coords are applet-relative but we're working with items in a
+        // child actor that is a different size and position
+        let appletBox = Cinnamon.util_get_transformed_allocation(this.actor);
+        let containerBox = Cinnamon.util_get_transformed_allocation(this.myactor);
+        let boxSize = vertical ? containerBox.y2 - containerBox.y1 
+                               : containerBox.x2 - containerBox.x1;
+        let mPos = vertical ? y + appletBox.y1 - containerBox.y1 
+                            : x + appletBox.x1 - containerBox.x1;
+
         let children = this.myactor.get_children();
-        let dropIndex = Math.round(mPos * children.length / boxSize);
+        let dropIndex = Math.min(children.length, Math.round(mPos * children.length / boxSize));
 
         // If the placeholder already exists, we just move
         // it, but if we are adding it, expand its size in
         // an animation
         if (!this._dragPlaceholder) {
-            this._createDragPlaceholder(dropIndex);
+            this.createDragPlaceholder(dropIndex);
         } else {
             this.myactor.set_child_at_index(this._dragPlaceholder.actor, dropIndex);
             this._dragPlaceholderIndex = dropIndex;
@@ -599,9 +643,8 @@ class CinnamonPanelLaunchersApplet extends Applet.Applet {
         let dropIndex = this._dragPlaceholderIndex;
         this._clearDragPlaceholder(true);
 
-        let currentIndex = this._launchers.indexOf(source);
-        if (currentIndex != -1) {
-            this._insertAtNewIndex(source, currentIndex, dropIndex);
+        if (this._launchers.indexOf(source) != -1) {
+            this.reinsertAtIndex(source, dropIndex);
         } else {
             if (isLauncher)
                 source.launchersBox.removeLauncher(source, false);
