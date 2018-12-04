@@ -22,6 +22,10 @@ const CUSTOM_LAUNCHERS_PATH = GLib.get_home_dir() + '/.cinnamon/panel-launchers'
 
 let pressLauncher = null;
 
+function sameOrNextIndex(oldIndex, newIndex) {
+    return newIndex == oldIndex || newIndex == oldIndex + 1;
+}
+
 class PanelAppLauncherMenu extends Applet.AppletPopupMenu {
     constructor(launcher, orientation) {
         super(launcher, orientation);
@@ -144,7 +148,6 @@ class PanelAppLauncher extends DND.LauncherDraggable {
         this._draggable = DND.makeDraggable(this.actor);
 
         this._signals.connect(this._draggable, 'drag-begin', Lang.bind(this, this._onDragBegin));
-        this._signals.connect(this._draggable, 'drag-cancelled', Lang.bind(this, this._onDragCancelled));
         this._signals.connect(this._draggable, 'drag-end', Lang.bind(this, this._onDragEnd));
 
         this._updateInhibit();
@@ -156,17 +159,15 @@ class PanelAppLauncher extends DND.LauncherDraggable {
         this._dragging = true;
         this._tooltip.hide();
         this._tooltip.preventShow = true;
+        this.actor.set_hover(false);
     }
 
-    _onDragEnd() {
+    _onDragEnd(source, time, success) {
         this._dragging = false;
         this._tooltip.preventShow = false;
-        this.launchersBox._clearDragPlaceholder();
-    }
-
-    _onDragCancelled() {
-        this._dragging = false;
-        this._tooltip.preventShow = false;
+        this.actor.sync_hover();
+        if (!success)
+            this.launchersBox._clearDragPlaceholder();
     }
 
     _updateInhibit() {
@@ -314,9 +315,10 @@ class CinnamonPanelLaunchersApplet extends Applet.Applet {
 
         this.orientation = orientation;
         this.icon_size = this.getPanelIconSize(St.IconType.FULLCOLOR);
+
         this._dragPlaceholder = null;
-        this._dragPlaceholderPos = -1;
-        this._animatingPlaceholdersCount = 0;
+        this._dragPlaceholderIndex = -1;
+        this._dragAnimating = false;
 
         this.myactor = new St.BoxLayout({ style_class: 'panel-launchers',
                                           important: true });
@@ -502,20 +504,6 @@ class CinnamonPanelLaunchersApplet extends Applet.Applet {
         this.sync_settings_proxy_to_settings();
     }
 
-    moveLauncher(launcher, pos) {
-        let origpos = this._launchers.indexOf(launcher);
-        if (origpos == -1)
-            return;
-
-        if (origpos < pos)
-            pos--;
-
-        this.myactor.set_child_at_index(launcher.actor, pos);
-        this._launchers.splice(origpos, 1);
-        this._move_launcher_in_proxy(launcher, pos);
-        this.sync_settings_proxy_to_settings();
-    }
-
     showAddLauncherDialog(timestamp, launcher){
         if (launcher) {
             Util.spawnCommandLine("cinnamon-desktop-editor -mcinnamon-launcher -f" + launcher.getId() + " " + this.settings.file.get_path());
@@ -524,121 +512,136 @@ class CinnamonPanelLaunchersApplet extends Applet.Applet {
         }
     }
 
-    _clearDragPlaceholder() {
-        if (this._dragPlaceholder) {
-            this._dragPlaceholder.animateOutAndDestroy();
-            this._dragPlaceholder = null;
-            this._dragPlaceholderPos = -1;
+    // drag and drop methods
+    _reinsertAtIndex(launcher, newIndex) {
+        let originalIndex = this._launchers.indexOf(launcher);
+        if (originalIndex == -1)
+            return;
+
+        if (originalIndex < newIndex)
+            newIndex--;
+
+        if (originalIndex != newIndex) {
+            this.myactor.set_child_at_index(launcher.actor, newIndex);
+            this._launchers.splice(originalIndex, 1);
+            this._launchers.splice(newIndex, 0, launcher);
+            this._move_launcher_in_proxy(launcher, newIndex);
+            this.sync_settings_proxy_to_settings();
         }
     }
 
-    handleDragOver(source, actor, x, y, time) {
-        if (!(source.isDraggableApp || (source instanceof DND.LauncherDraggable))) return DND.DragMotionResult.NO_DROP;
-        let children = this.myactor.get_children();
-        let numChildren = children.length;
-        let boxWidth;
-        let vertical = false;
+    _createDragPlaceholder(index, skipAnimation=false) {
+        if (this._dragPlaceholder)
+            return;
 
-        if (this.myactor.height > this.myactor.width) {  // assume oriented vertically
-            vertical = true;
-            boxWidth = this.myactor.height;
+        let vertical = this.orientation == St.Side.LEFT || this.orientation == St.Side.RIGHT;
+        this._dragPlaceholder = new DND.GenericDragPlaceholderItem();
+        let placeholderSize = vertical ? [1, this.icon_size] : [this.icon_size, 1];
+        this._dragPlaceholder.child.set_size(...placeholderSize);
+        this.myactor.insert_child_at_index(this._dragPlaceholder.actor, index);
+        this._dragPlaceholderIndex = index;
 
-            if (this._dragPlaceholder) {
-                boxWidth -= this._dragPlaceholder.actor.height;
-                numChildren--;
-            }
+        if (!skipAnimation) {
+            this._dragAnimating = true;
+            this._dragPlaceholder.animateIn(() => this._dragAnimating = false);
+        }
+    }
+
+    _clearDragPlaceholder(skipAnimation=false) {
+        if (!this._dragPlaceholder)
+            return;
+
+        if (skipAnimation) {
+            this._dragPlaceholder.actor.destroy();
+            this._dragAnimating = false;
         } else {
-            boxWidth = this.myactor.width;
+            this._dragAnimating = true;
+            this._dragPlaceholder.animateOutAndDestroy(() => this._dragAnimating = false);
+        }
+        this._dragPlaceholder = null;
+        this._dragPlaceholderIndex = -1;
+    }
 
-            if (this._dragPlaceholder) {
-                boxWidth -= this._dragPlaceholder.actor.width;
-                numChildren--;
+    handleDragOver(source, actor, x, y, time) {
+        let isLauncher = source instanceof DND.LauncherDraggable;
+        // don't present drop if the source isn't an app/launcher type, or if a placeholder is animating
+        // out
+        if (!(source.isDraggableApp || isLauncher) || (!this._dragPlaceholder && this._dragAnimating))
+            return DND.DragMotionResult.NO_DROP;
+
+        // if we are animating and already are showing a placeholder (animate in)
+        // skip processing and just return the correct DragMotionType
+        if (!this._dragAnimating) {
+            let vertical = this.orientation == St.Side.LEFT || this.orientation == St.Side.RIGHT;
+
+            // dnd coords are applet-relative but we're working with items in a
+            // child actor that is a different size and position
+            let appletBox = Cinnamon.util_get_transformed_allocation(this.actor);
+            let containerBox = Cinnamon.util_get_transformed_allocation(this.myactor);
+            let boxSize = vertical ? containerBox.y2 - containerBox.y1
+                                : containerBox.x2 - containerBox.x1;
+            let mPos = vertical ? y + appletBox.y1 - containerBox.y1
+                                : x + appletBox.x1 - containerBox.x1;
+
+            let children = this.myactor.get_children();
+            let dropIndex = Math.min(children.length, Math.round(mPos * children.length / boxSize));
+            let originalIndex = this._launchers.indexOf(source);
+
+            // don't allow dropping before/after self.
+            // if we're already showing a placeholder we have to offset the original index if it's before it
+            if (this._dragPlaceholder && originalIndex != -1 && this._dragPlaceholderIndex < originalIndex)
+                originalIndex++;
+
+            // hovering a drop next to the original index, cancel drop eligibility
+            if (originalIndex != -1 && sameOrNextIndex(originalIndex, dropIndex)) {
+                this._clearDragPlaceholder();
+                return DND.DragMotionResult.NO_DROP;
+            }
+
+            // If the placeholder already exists, we move it
+            // if the position has changed, but if we are adding
+            // it, expand its size in an animation
+            if (!this._dragPlaceholder) {
+                this._createDragPlaceholder(dropIndex);
+            } else if (!sameOrNextIndex(this._dragPlaceholderIndex, dropIndex)) {
+                if (this._dragPlaceholderIndex < dropIndex)
+                    dropIndex--;
+                this.myactor.set_child_at_index(this._dragPlaceholder.actor, dropIndex);
+                this._dragPlaceholderIndex = dropIndex;
             }
         }
 
-        let launcherPos = this._launchers.indexOf(source);
-        let pos;
-
-        if (vertical)
-            pos = Math.round(y * numChildren / boxWidth);
-        else
-            pos = Math.round(x * numChildren / boxWidth);
-
-        if (pos != this._dragPlaceholderPos && pos <= numChildren) {
-            if (this._animatingPlaceholdersCount > 0) {
-                let launchersChildren = children.filter(function(actor) {
-                    return actor._delegate instanceof DND.LauncherDraggable;
-                });
-                this._dragPlaceholderPos = children.indexOf(launchersChildren[pos]);
-            } else {
-                this._dragPlaceholderPos = pos;
-            }
-
-            // Don't allow positioning before or after self
-            if (launcherPos != -1 && pos == launcherPos) {
-                if (this._dragPlaceholder) {
-                    this._dragPlaceholder.animateOutAndDestroy();
-                    this._animatingPlaceholdersCount++;
-                    this._dragPlaceholder.actor.connect('destroy',
-                        Lang.bind(this, function() {
-                            this._animatingPlaceholdersCount--;
-                        }));
-                }
-                this._dragPlaceholder = null;
-
-                return DND.DragMotionResult.CONTINUE;
-            }
-
-            // If the placeholder already exists, we just move
-            // it, but if we are adding it, expand its size in
-            // an animation
-            let fadeIn;
-            if (this._dragPlaceholder) {
-                this._dragPlaceholder.actor.destroy();
-                fadeIn = false;
-            } else {
-                fadeIn = true;
-            }
-
-            this._dragPlaceholder = new DND.GenericDragPlaceholderItem();
-            this._dragPlaceholder.child.set_width (20);
-            this._dragPlaceholder.child.set_height (10);
-            this.myactor.insert_child_at_index(this._dragPlaceholder.actor,
-                                   this._dragPlaceholderPos);
-            if (fadeIn) this._dragPlaceholder.animateIn();
-        }
-
-        if (source instanceof DND.LauncherDraggable && source.launchersBox == this)
+        if (isLauncher)
             return DND.DragMotionResult.MOVE_DROP;
 
         return DND.DragMotionResult.COPY_DROP;
     }
 
+    handleDragOut() {
+        this._clearDragPlaceholder();
+    }
+
     acceptDrop(source, actor, x, y, time) {
-        if (!(source.isDraggableApp || (source instanceof DND.LauncherDraggable))) return DND.DragMotionResult.NO_DROP;
+        let isLauncher = source instanceof DND.LauncherDraggable;
+        if (!this._dragPlaceholder || !(source.isDraggableApp || isLauncher))
+            return false;
 
-        let sourceId;
-        if (source instanceof DND.LauncherDraggable) sourceId = source.getId();
-        else sourceId = source.get_app_id();
+        let dropIndex = this._dragPlaceholderIndex;
+        this._clearDragPlaceholder(true);
 
-        let launcherPos = 0;
-        let children = this.myactor.get_children();
-        for (let i = 0; i < this._dragPlaceholderPos; i++) {
-            if (this._dragPlaceholder &&
-                children[i] == this._dragPlaceholder.actor)
-                continue;
-
-            if (source === children[i]._delegate)
-                continue;
-            launcherPos++;
-        }
-        if (source instanceof DND.LauncherDraggable && source.launchersBox == this)
-            this.moveLauncher(source, launcherPos);
-        else {
-            if (source instanceof DND.LauncherDraggable)
+        if (this._launchers.indexOf(source) != -1) {
+            this._reinsertAtIndex(source, dropIndex);
+        } else {
+            let sourceId;
+            if (isLauncher) {
+                sourceId = source.getId();
                 source.launchersBox.removeLauncher(source, false);
-            this.addForeignLauncher(sourceId, launcherPos);
+            } else {
+                sourceId = source.get_app_id();
+            }
+            this.addForeignLauncher(sourceId, dropIndex, source);
         }
+
         actor.destroy();
         return true;
     }
