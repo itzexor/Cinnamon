@@ -143,7 +143,7 @@ class SelectionInhibitor {
             return;
 
         this._inhibited = state;
-        this._container.get_children().forEach(c => c.set_reactive(!state));
+        this._container.get_children().forEach(c => c.reactive = !state);
 
         if (state && this._lastPos === null) {
             let [mx, my, ] = global.get_pointer();
@@ -1207,7 +1207,7 @@ class CinnamonMenuApplet extends Applet.TextIconApplet {
         this.settings.bind("overlay-key", "overlayKey", this._updateKeybinding);
         this.settings.bind("show-category-icons", "showCategoryIcons", this._refreshAll);
         this.settings.bind("show-application-icons", "showApplicationIcons", this._refreshAll);
-        this.settings.bind("favbox-show", "favBoxShow", this._favboxtoggle);
+        this.settings.bind("favbox-show", "favBoxShow", () => this.leftPane.visible = this.favBoxShow);
         this.settings.bind("enable-animation", "enableAnimation", null);
         this.settings.bind("favbox-min-height", "favBoxMinHeight", this._recalc_height);
 
@@ -1238,7 +1238,6 @@ class CinnamonMenuApplet extends Applet.TextIconApplet {
         this._previousTreeSelectedActor = null;
         this._activeContainer = null;
         this._activeActor = null;
-        this._applicationsBoxWidth = 0;
         this.menuIsOpening = false;
         this._knownApps = []; // Used to keep track of apps that are already installed, so we can highlight newly installed ones
         this._appsWereRefreshed = false;
@@ -1431,15 +1430,10 @@ class CinnamonMenuApplet extends Applet.TextIconApplet {
 
             this.lastSelectedCategory = null;
 
-            let n = Math.min(this._applicationsButtons.length,
-                             INITIAL_BUTTON_LOAD);
-            for (let i = 0; i < n; i++) {
-                this._applicationsButtons[i].actor.show();
-            }
+            this._applicationsButtons.forEach(b => b.actor.visible = true);
             this._allAppsCategoryButton.actor.style_class = "menu-category-button-selected";
-            this.favBoxIter.reloadVisible();
 
-            Mainloop.idle_add(Lang.bind(this, this._initial_cat_selection, n));
+            this.favBoxIter.reloadVisible();
         } else {
             if (this._appletEnterEventId > 0) {
                 this.actor.handler_unblock(this._appletEnterEventId);
@@ -1461,26 +1455,11 @@ class CinnamonMenuApplet extends Applet.TextIconApplet {
         }
     }
 
-    _initial_cat_selection (start_index) {
-        let n = this._applicationsButtons.length;
-        for (let i = start_index; i < n; i++) {
-            this._applicationsButtons[i].actor.show();
-        }
-    }
-
     destroy() {
         this.actor._delegate = null;
         this.menu.destroy();
         this.actor.destroy();
         this.emit('destroy');
-    }
-
-    _favboxtoggle() {
-        if (!this.favBoxShow) {
-            this.leftPane.hide();
-        } else {
-            this.leftPane.show();
-        }
     }
 
     _updateIconAndLabel(){
@@ -1514,9 +1493,9 @@ class CinnamonMenuApplet extends Applet.TextIconApplet {
 
         // Hide the icon box if the icon name/path is empty
         if ((this.menuCustom && this.menuIcon == "") || (!this.menuCustom && global.settings.get_string('app-menu-icon-name') == "")){
-            this._applet_icon_box.hide();
+            this._applet_icon_box.visible = false;
         } else {
-            this._applet_icon_box.show();
+            this._applet_icon_box.visible = true;
         }
 
         // Hide the menu label in vertical panels
@@ -2485,7 +2464,6 @@ class CinnamonMenuApplet extends Applet.TextIconApplet {
 
         this._transientButtons = [];
         this._applicationsButtonFromApp = {};
-        this._applicationsBoxWidth = 0;
 
         this._allAppsCategoryButton = new CategoryButton(null);
         this._addEnterEvent(this._allAppsCategoryButton, Lang.bind(this, function() {
@@ -2874,7 +2852,7 @@ class CinnamonMenuApplet extends Applet.TextIconApplet {
         this._screenSaverProxy = new ScreenSaver.ScreenSaverProxy();
 
         this.leftPane.add(this.leftBox, { y_align: St.Align.END, y_fill: false });
-        this._favboxtoggle();
+        this.leftPane.visible = this.favBoxShow;
 
         let rightPane = new St.BoxLayout({ vertical: true });
 
@@ -3013,26 +2991,26 @@ class CinnamonMenuApplet extends Applet.TextIconApplet {
             let actor = actors[i];
             actor.style_class = "menu-application-button";
             if (hide_apps) {
-                actor.hide();
+                actor.visible = false;
             }
         }
         actors = this.categoriesBox.get_children();
         for (let i = 0; i < actors.length; i++){
             let actor = actors[i];
             actor.style_class = "menu-category-button";
-            actor.show();
+            actor.visible = true;
         }
         actors = this.favoritesBox.get_children();
         for (let i = 0; i < actors.length; i++){
             let actor = actors[i];
             actor.remove_style_pseudo_class("hover");
-            actor.show();
+            actor.visible = true;
         }
         actors = this.systemButtonsBox.get_children();
         for (let i = 0; i < actors.length; i++){
             let actor = actors[i];
             actor.remove_style_pseudo_class("hover");
-            actor.show();
+            actor.visible = true;
         }
     }
 
@@ -3086,87 +3064,69 @@ class CinnamonMenuApplet extends Applet.TextIconApplet {
         }
     }
 
-    _resize_actor_iter(actor) {
-        let [min, nat] = actor.get_preferred_width(-1.0);
-        if (nat > this._applicationsBoxWidth){
-            this._applicationsBoxWidth = nat;
-            this.applicationsBox.set_width(this._applicationsBoxWidth + 42); // The answer to life...
-        }
-    }
-
     _resizeApplicationsBox() {
-        this._applicationsBoxWidth = 0;
+        let w = 0;
         this.applicationsBox.set_width(-1);
-        let child = this.applicationsBox.get_first_child();
-        this._resize_actor_iter(child);
-
-        while ((child = child.get_next_sibling()) != null) {
-            this._resize_actor_iter(child);
-        }
+        this.applicationsBox.get_children().forEach(c => {
+            let [min, nat] = c.get_preferred_width(-1);
+            if (nat > w)
+                w = nat;
+        });
+        this.applicationsBox.width = w;
     }
 
     _displayButtons(appCategory, places, recent, apps, autocompletes, exactMatch){
         let selectedActor = null;
         if (appCategory) {
             if (appCategory == "all") {
-                this._applicationsButtons.forEach(item => item.actor.show());
+                this._applicationsButtons.forEach(item => item.actor.visible = true);
             } else {
-                this._applicationsButtons.forEach(item => {
-                    if (item.category.indexOf(appCategory) != -1) {
-                        item.actor.show();
-                    } else {
-                        item.actor.hide();
-                    }
-                });
+                this._applicationsButtons.forEach(item => item.actor.visible = item.category.includes(appCategory));
             }
         } else if (apps) {
             for (let i = 0; i < this._applicationsButtons.length; i++) {
                 let button = this._applicationsButtons[i];
                 let appId = button.app.get_id();
-                if (apps.indexOf(appId) !== -1) {
-                    button.actor.show();
+                if (apps.includes(appId)) {
+                    button.actor.visible = true;
                     if (appId === exactMatch) {
                         selectedActor = button.actor;
                     }
                 } else {
-                    button.actor.hide();
+                    button.actor.visible = false;
                 }
             }
         } else {
-            this._applicationsButtons.forEach(item => item.actor.hide());
+            this._applicationsButtons.forEach(item => item.actor.visible = false);
         }
         if (places) {
             if (places === -1) {
-                this._placesButtons.forEach(item => item.actor.show());
+                this._placesButtons.forEach(item => item.actor.visible = true);
             } else {
                 for (let i = 0; i < this._placesButtons.length; i++) {
                     let buttonName = this._placesButtons[i].button_name;
                     if (places.indexOf(buttonName) !== -1) {
-                        this._placesButtons[i].actor.show();
+                        this._placesButtons[i].actor.visible = true;
                         if (!selectedActor && buttonName === exactMatch)
                             selectedActor = this._placesButtons[i].actor;
                     } else {
-                        this._placesButtons[i].actor.hide();
+                        this._placesButtons[i].actor.visible = false;
                     }
                 }
             }
         } else {
-            this._placesButtons.forEach(item => item.actor.hide());
+            this._placesButtons.forEach(item => item.actor.visible = false);
         }
         if (recent) {
             if (recent == -1) {
-                this._recentButtons.forEach(item => item.actor.show());
+                this._recentButtons.forEach(item => item.actor.visible = true);
             } else {
                 for (let i = 0; i < this._recentButtons.length; i++) {
-                    if (recent.indexOf(this._recentButtons[i].button_name) != -1) {
-                        this._recentButtons[i].actor.show();
-                    } else {
-                        this._recentButtons[i].actor.hide();
-                    }
+                    this._recentButtons[i].actor.visible = recent.includes(this._recentButtons[i].button_name);
                 }
             }
         } else {
-            this._recentButtons.forEach(item => item.actor.hide());
+            this._recentButtons.forEach(item => item.actor.visible = false);
         }
         if (autocompletes) {
 
@@ -3179,13 +3139,12 @@ class CinnamonMenuApplet extends Applet.TextIconApplet {
                 this._addEnterEvent(button, Lang.bind(this, this._appEnterEvent, button));
                 this._transientButtons.push(button);
                 this.applicationsBox.add_actor(button.actor);
-                button.actor.realize();
             }
         }
 
         this._searchProviderButtons.forEach(item => {
             if (item.actor.visible) {
-                item.actor.hide();
+                item.actor.visible = false;
             }
         });
 
@@ -3201,7 +3160,7 @@ class CinnamonMenuApplet extends Applet.TextIconApplet {
                 if (active){
                     button.set_style_class_name("menu-category-button");
                     if (icon) {
-                        icon.set_opacity(255);
+                        icon.opacity = 255;
                     }
                 } else {
                     button.set_style_class_name("menu-category-button-greyed");
@@ -3209,7 +3168,7 @@ class CinnamonMenuApplet extends Applet.TextIconApplet {
                         let icon_opacity = icon.get_theme_node().get_double('opacity');
                         icon_opacity = Math.min(Math.max(0, icon_opacity), 1);
                         if (icon_opacity) // Don't set opacity to 0 if not defined
-                            icon.set_opacity(icon_opacity * 255);
+                            icon.opacity = icon_opacity * 255;
                     }
                 }
             }
