@@ -828,7 +828,7 @@ class AppGroup {
         this.handleFavorite();
     }
 
-    windowRemoved(metaWorkspace, metaWindow, refWindow, cb) {
+    windowRemoved(metaWindow, refWindow, cb) {
         if (refWindow === -1) return;
 
         this.signals.disconnect('notify::title', metaWindow);

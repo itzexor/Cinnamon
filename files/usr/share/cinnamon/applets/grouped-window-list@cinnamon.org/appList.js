@@ -22,8 +22,8 @@ class AppList {
             updateAppGroupIndexes: () => this.updateAppGroupIndexes(),
             closeAllRightClickMenus: (cb) => this.closeAllRightClickMenus(cb),
             closeAllHoverMenus: (cb) => this.closeAllHoverMenus(cb),
-            windowAdded: (win) => this.windowAdded(this.metaWorkspace, win),
-            windowRemoved: (win) => this.windowRemoved(this.metaWorkspace, win),
+            windowAdded: (win) => this.windowAdded(win),
+            windowRemoved: (win) => this.windowRemoved(win),
             removeChild: (actor) => {
                 if (this.state.willUnmount) {
                     return;
@@ -49,8 +49,8 @@ class AppList {
         this.lastFocusedApp = null;
 
         // Connect all the signals
-        this.signals.connect(this.metaWorkspace, 'window-added', (...args) => this.windowAdded(...args));
-        this.signals.connect(this.metaWorkspace, 'window-removed', (...args) => this.windowRemoved(...args));
+        this.signals.connect(global.window_manager, 'map', (wm, actor) => imports.mainloop.idle_add(() => this.windowAdded(actor.metaWindow)));
+        this.signals.connect(global.window_manager, 'destroy', (wm, actor) => this.windowRemoved(actor.metaWindow));
         this.on_orientation_changed(null, true);
     }
 
@@ -185,7 +185,7 @@ class AppList {
             }
             if (!app) continue;
 
-            this.windowAdded(this.metaWorkspace, null, app, true);
+            this.windowAdded(null, app, true);
         }
     }
 
@@ -198,7 +198,7 @@ class AppList {
         }
 
         for (let i = 0, len = windows.length; i < len; i++) {
-            this.windowAdded(this.metaWorkspace, windows[i]);
+            this.windowAdded(windows[i]);
         }
     }
 
@@ -225,7 +225,7 @@ class AppList {
             || this.state.monitorWatchList.indexOf(metaWindow.get_monitor()) > -1);
     }
 
-    windowAdded(metaWorkspace, metaWindow, app, isFavoriteApp) {
+    windowAdded(metaWindow, app, isFavoriteApp) {
         if (!this.state) return;
 
         if (this.state.appletReady && this.state.settings.showAllWorkspaces && metaWindow && !metaWindow.__gwlInit__) {
@@ -284,7 +284,6 @@ class AppList {
                 listState: this.listState,
                 app,
                 isFavoriteApp,
-                metaWorkspace,
                 metaWindows,
                 metaWindow,
                 appId
@@ -351,7 +350,7 @@ class AppList {
         this.appList = newAppList;
     }
 
-    windowRemoved(metaWorkspace, metaWindow) {
+    windowRemoved(metaWindow) {
         if (!this.state) return;
 
         if ((metaWindow.is_on_all_workspaces() || this.state.settings.showAllWorkspaces)
@@ -385,7 +384,7 @@ class AppList {
             }
         });
         if (refApp > -1) {
-            this.appList[refApp].windowRemoved(metaWorkspace, metaWindow, refWindow, (appId, isFavoriteApp) => {
+            this.appList[refApp].windowRemoved(metaWindow, refWindow, (appId, isFavoriteApp) => {
                 if (isFavoriteApp || (isFavoriteApp && !this.state.settings.groupApps && windowCount === 0)) {
                     this.appList[refApp].groupState.set({groupReady: false});
                     this.appList[refApp].actor.set_style_pseudo_class('closed');

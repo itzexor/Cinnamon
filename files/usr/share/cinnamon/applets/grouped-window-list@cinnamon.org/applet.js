@@ -269,12 +269,12 @@ class GroupedWindowListApplet extends Applet.Applet {
             getTracker: () => this.tracker,
             addWindowToAllWorkspaces: (win, app, isFavoriteApp) => {
                 each(this.appLists, function(appList) {
-                    appList.windowAdded(appList.metaWorkspace, win, app, isFavoriteApp);
+                    appList.windowAdded(win, app, isFavoriteApp);
                 });
             },
             removeWindowFromAllWorkspaces: (win) => {
                 each(this.appLists, function(appList) {
-                    appList.windowRemoved(appList.metaWorkspace, win);
+                    appList.windowRemoved(win);
                 });
             },
             removeWindowFromOtherWorkspaces: (win) => {
@@ -282,7 +282,7 @@ class GroupedWindowListApplet extends Applet.Applet {
                     if (appList.listState.workspaceIndex === this.state.currentWs) {
                         return;
                     }
-                    appList.windowRemoved(appList.metaWorkspace, win);
+                    appList.windowRemoved(win);
                 });
             },
             refreshCurrentAppList: () => this.refreshCurrentAppList(),
@@ -477,8 +477,8 @@ class GroupedWindowListApplet extends Applet.Applet {
         if (this.state.settings.listMonitorWindows
             && this.state.monitorWatchList.length !== this.numberOfMonitors) {
             let appList = this.getCurrentAppList();
-            appList.windowRemoved(metaWorkspace, metaWindow);
-            appList.windowAdded(metaWorkspace, metaWindow);
+            appList.windowRemoved(metaWindow);
+            appList.windowAdded(metaWindow);
         }
     }
 
@@ -990,11 +990,11 @@ class GroupedWindowListApplet extends Applet.Applet {
         let appList = this.getCurrentAppList();
 
         if (metaWindow.is_skip_taskbar()) {
-            appList.windowRemoved(appList.metaWorkspace, metaWindow);
+            appList.windowRemoved(metaWindow);
             return;
         }
 
-        appList.windowAdded(appList.metaWorkspace, metaWindow);
+        appList.windowAdded(metaWindow);
     }
 
     onUIScaleChange() {
