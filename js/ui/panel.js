@@ -1691,6 +1691,7 @@ PanelZoneDNDHandler.prototype = {
         this._panelId = panelId;
         this._dragPlaceholder = null;
         this._dragPlaceholderPos = -1;
+        this._dragAnimating = false;
 
         this._origAppletCenters = null;
         this._origAppletPos = -1;
@@ -1699,88 +1700,88 @@ PanelZoneDNDHandler.prototype = {
     },
 
     handleDragOver: function(source, actor, x, y, time) {
-
-        if (!(source instanceof Applet.Applet)) return DND.DragMotionResult.NO_DROP;
-
-        if (!this._hasSupportedLayout(source)) {
+        if (!(source instanceof Applet.Applet) || !this._hasSupportedLayout(source))
             return DND.DragMotionResult.NO_DROP;
-        }
 
-        let vertical_panel = this._panelZone.get_parent()._delegate.is_vertical;
-        let children = this._panelZone.get_children();
-
-        if (this._origAppletCenters == null) {
-            this._origAppletCenters = [];
-            this._origAppletPos = children.indexOf(source.actor);
-
-            let j;
-
-            for (j = 0; j < children.length; j++) {
-                let allocation = children[j].get_allocation_box();
-                let center = 0;
-                if (vertical_panel) {
-                    center = (allocation.y1 + allocation.y2) / 2;
-                } else {
-                    center = (allocation.x1 + allocation.x2) / 2;
-                }
-
-                this._origAppletCenters.push(center);
-            }
-        }
-
-        let pos = 0;
-        let i = 0;
-
-        while (i < this._origAppletCenters.length) {
-            if (vertical_panel) {
-                if (y > (this._origAppletCenters[i])) {
-                    pos = ++i;
-                } else {
-                    break;
-                }
-            } else {
-                if (x > (this._origAppletCenters[i])) {
-                    pos = ++i;
-                } else {
-                    break;
-                }
-            }
-        }
-
-        if (pos != this._dragPlaceholderPos) {
-            this._dragPlaceholderPos = pos;
-            // Don't allow positioning before or after self
-
-            if (this._origAppletPos != -1 && (pos == this._origAppletPos || pos == this._origAppletPos + 1)) {
-                this._clearDragPlaceholder();
+        if (this._dragAnimating) {
+            if (!this._dragPlaceholder)
                 return DND.DragMotionResult.CONTINUE;
+        } else {
+            let vertical_panel = this._panelZone.get_parent()._delegate.is_vertical;
+            let children = this._panelZone.get_children();
+
+            if (this._origAppletCenters == null) {
+                this._origAppletCenters = [];
+                this._origAppletPos = children.indexOf(source.actor);
+
+                let j;
+
+                for (j = 0; j < children.length; j++) {
+                    let allocation = children[j].get_allocation_box();
+                    let center = 0;
+                    if (vertical_panel) {
+                        center = (allocation.y1 + allocation.y2) / 2;
+                    } else {
+                        center = (allocation.x1 + allocation.x2) / 2;
+                    }
+
+                    this._origAppletCenters.push(center);
+                }
             }
 
-            // If the placeholder already exists, we just move
-            // it, but if we are adding it, expand its size in
-            // an animation
+            let pos = 0;
+            let i = 0;
 
-            if (this._dragPlaceholder) {
-                this._panelZone.set_child_at_index(this._dragPlaceholder.actor,
-                                                   this._dragPlaceholderPos);
-            } else {
-                this._dragPlaceholder = new DND.GenericDragPlaceholderItem();
-
+            while (i < this._origAppletCenters.length) {
                 if (vertical_panel) {
-                    this._dragPlaceholder.child.set_width (10 * global.ui_scale);
-                    this._dragPlaceholder.child.set_height (20 * global.ui_scale);
+                    if (y > (this._origAppletCenters[i])) {
+                        pos = ++i;
+                    } else {
+                        break;
+                    }
                 } else {
-                    this._dragPlaceholder.child.set_width (20 * global.ui_scale);
-                    this._dragPlaceholder.child.set_height (10 * global.ui_scale);
+                    if (x > (this._origAppletCenters[i])) {
+                        pos = ++i;
+                    } else {
+                        break;
+                    }
+                }
+            }
+
+            if (pos != this._dragPlaceholderPos) {
+                this._dragPlaceholderPos = pos;
+                // Don't allow positioning before or after self
+
+                if (this._origAppletPos != -1 && (pos == this._origAppletPos || pos == this._origAppletPos + 1)) {
+                    this._clearDragPlaceholder();
+                    return DND.DragMotionResult.CONTINUE;
                 }
 
-                this._panelZone.insert_child_at_index(this._dragPlaceholder.actor,
-                                                      this._dragPlaceholderPos);
+                // If the placeholder already exists, we just move
+                // it, but if we are adding it, expand its size in
+                // an animation
 
-                this._dragPlaceholder.animateIn();
+                if (this._dragPlaceholder) {
+                    this._panelZone.set_child_at_index(this._dragPlaceholder.actor,
+                                                    this._dragPlaceholderPos);
+                } else {
+                    this._dragPlaceholder = new DND.GenericDragPlaceholderItem();
+
+                    if (vertical_panel) {
+                        this._dragPlaceholder.child.set_width (10 * global.ui_scale);
+                        this._dragPlaceholder.child.set_height (20 * global.ui_scale);
+                    } else {
+                        this._dragPlaceholder.child.set_width (20 * global.ui_scale);
+                        this._dragPlaceholder.child.set_height (10 * global.ui_scale);
+                    }
+
+                    this._panelZone.insert_child_at_index(this._dragPlaceholder.actor,
+                                                        this._dragPlaceholderPos);
+                    this._dragAnimating = true;
+                    this._dragPlaceholder.animateIn(() => this._dragAnimating = false);
+                }
             }
         }
-
         return DND.DragMotionResult.MOVE_DROP;
     },
 
@@ -1861,7 +1862,8 @@ PanelZoneDNDHandler.prototype = {
 
     _clearDragPlaceholder: function() {
         if (this._dragPlaceholder) {
-            this._dragPlaceholder.animateOutAndDestroy();
+            this._dragAnimating = true;
+            this._dragPlaceholder.animateOutAndDestroy(() => this._dragAnimating = false);
             this._dragPlaceholder = null;
             this._dragPlaceholderPos = -1;
         }
