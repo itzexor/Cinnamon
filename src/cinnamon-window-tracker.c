@@ -79,9 +79,9 @@ static void disassociate_window (CinnamonWindowTracker *tracker, MetaWindow *win
 
 static void
 cinnamon_window_tracker_get_property (GObject    *gobject,
-                            guint       prop_id,
-                            GValue     *value,
-                            GParamSpec *pspec)
+                                      guint       prop_id,
+                                      GValue     *value,
+                                      GParamSpec *pspec)
 {
   CinnamonWindowTracker *tracker = CINNAMON_WINDOW_TRACKER (gobject);
 
@@ -307,7 +307,7 @@ get_app_from_gapplication_id (MetaWindow  *window)
  */
 static CinnamonApp*
 get_app_from_window_group (CinnamonWindowTracker  *tracker,
-                           MetaWindow          *window)
+                           MetaWindow             *window)
 {
   CinnamonApp *result;
   GSList *group_windows;
@@ -355,7 +355,7 @@ get_app_from_window_group (CinnamonWindowTracker  *tracker,
  */
 static CinnamonApp *
 get_app_from_window_pid (CinnamonWindowTracker  *tracker,
-                         MetaWindow          *window)
+                         MetaWindow             *window)
 {
   CinnamonApp *result;
   int pid;
@@ -386,7 +386,7 @@ get_app_from_window_pid (CinnamonWindowTracker  *tracker,
  */
 static CinnamonApp *
 get_app_for_window (CinnamonWindowTracker    *tracker,
-                    MetaWindow            *window)
+                    MetaWindow               *window)
 {
   CinnamonApp *result = NULL;
   const char *startup_id;
@@ -483,7 +483,7 @@ update_focus_app (CinnamonWindowTracker *self)
 
 static void
 tracked_window_changed (CinnamonWindowTracker *self,
-                        MetaWindow         *window)
+                        MetaWindow            *window)
 {
   /* It's simplest to just treat this as a remove + add. */
   disassociate_window (self, window);
@@ -513,7 +513,7 @@ on_gtk_application_id_changed (MetaWindow  *window,
 
 static void
 track_window (CinnamonWindowTracker *self,
-              MetaWindow      *window)
+              MetaWindow            *window)
 {
   CinnamonApp *app;
 
@@ -537,8 +537,8 @@ track_window (CinnamonWindowTracker *self,
 
 static void
 cinnamon_window_tracker_on_window_added (MetaWorkspace   *workspace,
-                                   MetaWindow      *window,
-                                   gpointer         user_data)
+                                         MetaWindow      *window,
+                                         gpointer         user_data)
 {
   CinnamonWindowTracker *self = CINNAMON_WINDOW_TRACKER (user_data);
 
@@ -547,7 +547,7 @@ cinnamon_window_tracker_on_window_added (MetaWorkspace   *workspace,
 
 static void
 disassociate_window (CinnamonWindowTracker   *self,
-                     MetaWindow        *window)
+                     MetaWindow              *window)
 {
   CinnamonApp *app;
 
@@ -573,8 +573,8 @@ disassociate_window (CinnamonWindowTracker   *self,
 
 static void
 cinnamon_window_tracker_on_window_removed (MetaWorkspace   *workspace,
-                                     MetaWindow      *window,
-                                     gpointer         user_data)
+                                           MetaWindow      *window,
+                                           gpointer         user_data)
 {
   disassociate_window (CINNAMON_WINDOW_TRACKER (user_data), window);
 }
@@ -604,8 +604,8 @@ load_initial_windows (CinnamonWindowTracker *tracker)
 
 static void
 cinnamon_window_tracker_on_n_workspaces_changed (MetaScreen    *screen,
-                                           GParamSpec    *pspec,
-                                           gpointer       user_data)
+                                                 GParamSpec    *pspec,
+                                                 gpointer       user_data)
 {
   CinnamonWindowTracker *self = CINNAMON_WINDOW_TRACKER (user_data);
   GList *workspaces, *iter;
@@ -650,8 +650,8 @@ init_window_tracking (CinnamonWindowTracker *self)
 }
 
 static void
-on_startup_sequence_changed (MetaScreen            *screen,
-                             SnStartupSequence     *sequence,
+on_startup_sequence_changed (MetaScreen               *screen,
+                             SnStartupSequence        *sequence,
                              CinnamonWindowTracker    *self)
 {
   CinnamonApp *app;
@@ -702,7 +702,7 @@ cinnamon_window_tracker_finalize (GObject *object)
  */
 CinnamonApp *
 cinnamon_window_tracker_get_window_app (CinnamonWindowTracker *tracker,
-                                     MetaWindow         *metawin)
+                                        MetaWindow            *metawin)
 {
   MetaWindow *transient_for;
   CinnamonApp *app;
@@ -730,7 +730,7 @@ cinnamon_window_tracker_get_window_app (CinnamonWindowTracker *tracker,
  */
 CinnamonApp *
 cinnamon_window_tracker_get_app_from_pid (CinnamonWindowTracker *self, 
-                                       int                 pid)
+                                          int                    pid)
 {
   GSList *running = cinnamon_app_system_get_running (cinnamon_app_system_get_default());
   GSList *iter;
@@ -776,8 +776,8 @@ on_child_exited (GPid      pid,
 
 void
 _cinnamon_window_tracker_add_child_process_app (CinnamonWindowTracker *tracker,
-                                             GPid                pid,
-                                             CinnamonApp           *app)
+                                                GPid                   pid,
+                                                CinnamonApp           *app)
 {
   gpointer pid_ptr = GINT_TO_POINTER((int)pid);
 
@@ -815,8 +815,8 @@ set_focus_app (CinnamonWindowTracker  *tracker,
 }
 
 static void
-on_focus_window_changed (MetaDisplay        *display,
-                         GParamSpec         *spec,
+on_focus_window_changed (MetaDisplay           *display,
+                         GParamSpec            *spec,
                          CinnamonWindowTracker *tracker)
 {
   update_focus_app (tracker);
