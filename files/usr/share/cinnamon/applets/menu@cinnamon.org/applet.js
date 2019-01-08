@@ -174,6 +174,10 @@ class GenericApplicationButton extends PopupMenu.PopupBaseMenuItem {
         this.app = app;
         this.appsMenuButton = appsMenuButton;
 
+        this.name = this.app.get_name();
+        let desc = app.get_description();
+        this.description = desc ? desc.split("\n")[0] : "";
+
         this.withMenu = withMenu;
         if (this.withMenu){
             this.menu = new PopupMenu.PopupSubMenu(this.actor);
@@ -189,7 +193,7 @@ class GenericApplicationButton extends PopupMenu.PopupBaseMenuItem {
     unhighlight() {
         var app_key = this.app.get_id();
         if (app_key == null) {
-            app_key = this.app.get_name() + ":" + this.app.get_description();
+            app_key = this.name + ":" + this.description;
         }
         this.appsMenuButton._knownApps.push(app_key);
         this.actor.remove_style_pseudo_class('highlighted');
@@ -288,6 +292,10 @@ class TransientButton extends PopupMenu.PopupBaseMenuItem {
     constructor(appsMenuButton, pathOrCommand) {
         super({hover: false});
         let displayPath = pathOrCommand;
+
+        this.name = "";
+        this.description = pathOrCommand;
+
         if (pathOrCommand.charAt(0) == '~') {
             pathOrCommand = pathOrCommand.slice(1);
             pathOrCommand = GLib.get_home_dir() + pathOrCommand;
@@ -306,27 +314,6 @@ class TransientButton extends PopupMenu.PopupBaseMenuItem {
         this.pathOrCommand = pathOrCommand;
 
         this.appsMenuButton = appsMenuButton;
-
-        // We need this fake app to help appEnterEvent/appLeaveEvent
-        // work with our search result.
-        this.app = {
-            get_app_info: {
-                get_filename() {
-                    return pathOrCommand;
-                }
-            },
-            get_id() {
-                return -1;
-            },
-            get_description() {
-                return this.pathOrCommand;
-            },
-            get_name() {
-                return '';
-            }
-        };
-
-
 
         this.file = Gio.file_new_for_path(this.pathOrCommand);
 
@@ -387,7 +374,7 @@ class ApplicationButton extends GenericApplicationButton {
             this.icon = this.app.create_icon_texture(APPLICATION_ICON_SIZE);
             this.addActor(this.icon);
         }
-        this.name = this.app.get_name();
+
         this.label = new St.Label({ text: this.name, style_class: 'menu-application-button-label' });
         this.label.clutter_text.ellipsize = Pango.EllipsizeMode.END;
         this.label.set_style(MAX_BUTTON_WIDTH);
@@ -434,27 +421,11 @@ class SearchProviderResultButton extends PopupMenu.PopupBaseMenuItem {
         this.provider = provider;
         this.result = result;
 
+        this.name = result.label;
+        this.description = result.description;
+
         this.appsMenuButton = appsMenuButton;
         this.actor.set_style_class_name('menu-application-button');
-
-        // We need this fake app to help appEnterEvent/appLeaveEvent
-        // work with our search result.
-        this.app = {
-            get_app_info: {
-                get_filename() {
-                    return result.id;
-                }
-            },
-            get_id() {
-                return -1;
-            },
-            get_description() {
-                return result.description;
-            },
-            get_name() {
-                return result.label;
-            }
-        };
 
         this.icon = null;
         if (result.icon){
@@ -497,15 +468,23 @@ class SearchProviderResultButton extends PopupMenu.PopupBaseMenuItem {
 }
 
 class PlaceButton extends PopupMenu.PopupBaseMenuItem {
-    constructor(appsMenuButton, place, button_name, showIcon) {
+    constructor(appsMenuButton, place, name, showIcon) {
         super({hover: false});
         this.appsMenuButton = appsMenuButton;
         this.place = place;
-        this.button_name = button_name;
+
+        this.name = name;
+        let selectedAppId = place.idDecoded;
+        selectedAppId = selectedAppId.substr(selectedAppId.indexOf(':') + 1);
+        let fileIndex = selectedAppId.indexOf('file:///');
+        if (fileIndex !== -1)
+            selectedAppId = selectedAppId.substr(fileIndex + 7);
+        this.description = selectedAppId;
+
         this.actor.set_style_class_name('menu-application-button');
         this.actor._delegate = this;
 
-        this.label = new St.Label({ text: this.button_name, style_class: 'menu-application-button-label' });
+        this.label = new St.Label({ text: this.name, style_class: 'menu-application-button-label' });
         this.label.clutter_text.ellipsize = Pango.EllipsizeMode.END;
         this.label.set_style(MAX_BUTTON_WIDTH);
         if (showIcon) {
@@ -560,13 +539,19 @@ class RecentButton extends PopupMenu.PopupBaseMenuItem {
         this.uri = file.uri;
         this.uriDecoded = file.uriDecoded;
         this.appsMenuButton = appsMenuButton;
-        this.button_name = file.name;
+
+        this.name = file.name;
+        let selectedAppUri = file.uriDecoded;
+        let fileIndex = selectedAppUri.indexOf("file:///");
+        if (fileIndex !== -1)
+            selectedAppUri = selectedAppUri.substr(fileIndex + 7);
+        this.description = selectedAppUri;
 
         this.menu = null;
 
         this.actor.set_style_class_name('menu-application-button');
         this.actor._delegate = this;
-        this.label = new St.Label({ text: this.button_name, style_class: 'menu-application-button-label' });
+        this.label = new St.Label({ text: this.name, style_class: 'menu-application-button-label' });
         this.label.clutter_text.ellipsize = Pango.EllipsizeMode.END;
         this.label.set_style(MAX_BUTTON_WIDTH);
         if (showIcon) {
@@ -726,7 +711,9 @@ class NoRecentDocsButton extends PopupMenu.PopupBaseMenuItem {
         super({hover: false});
         this.actor.set_style_class_name('menu-application-button');
         this.actor._delegate = this;
-        this.button_name = "";
+
+        this.name = label;
+        this.description = "";
 
         this.label = new St.Label({ text: label, style_class: 'menu-application-button-label' });
         this.label.clutter_text.ellipsize = Pango.EllipsizeMode.END;
@@ -756,9 +743,12 @@ class RecentClearButton extends PopupMenu.PopupBaseMenuItem {
         super({hover: false});
         this.appsMenuButton = appsMenuButton;
         this.actor.set_style_class_name('menu-application-button');
-        this.button_name = _("Clear list");
+
+        this.name = _("Clear list");
+        this.description = _("Clear all recent documents");
+
         this.actor._delegate = this;
-        this.label = new St.Label({ text: this.button_name, style_class: 'menu-application-button-label' });
+        this.label = new St.Label({ text: this.name, style_class: 'menu-application-button-label' });
         this.icon = new St.Icon({ icon_name: 'edit-clear', icon_type: St.IconType.SYMBOLIC, icon_size: APPLICATION_ICON_SIZE });
         this.addActor(this.icon);
         this.addActor(this.label);
@@ -894,7 +884,7 @@ class SystemButton extends PopupMenu.PopupBaseMenuItem {
         super({hover: false});
 
         this.name = name;
-        this.desc = desc;
+        this.description = desc;
 
         let monitorHeight = Main.layoutManager.primaryMonitor.height;
         let real_size = (0.7 * monitorHeight) / nbFavorites;
@@ -2207,12 +2197,7 @@ class CinnamonMenuApplet extends Applet.TextIconApplet {
                     this._clearPrevSelection(button.actor);
                     button.actor.style_class = "menu-application-button-selected";
                     this.selectedAppTitle.set_text("");
-                    let selectedAppId = button.place.idDecoded;
-                    selectedAppId = selectedAppId.substr(selectedAppId.indexOf(':') + 1);
-                    let fileIndex = selectedAppId.indexOf('file:///');
-                    if (fileIndex !== -1)
-                        selectedAppId = selectedAppId.substr(fileIndex + 7);
-                    this.selectedAppDescription.set_text(selectedAppId);
+                    this.selectedAppDescription.set_text(button.description);
                 });
             };
 
@@ -2297,11 +2282,7 @@ class CinnamonMenuApplet extends Applet.TextIconApplet {
                         this._clearPrevSelection(button.actor);
                         button.actor.style_class = "menu-application-button-selected";
                         this.selectedAppTitle.set_text("");
-                        let selectedAppUri = button.uriDecoded;
-                        let fileIndex = selectedAppUri.indexOf("file:///");
-                        if (fileIndex !== -1)
-                            selectedAppUri = selectedAppUri.substr(fileIndex + 7);
-                        this.selectedAppDescription.set_text(selectedAppUri);
+                        this.selectedAppDescription.set_text(button.description);
                     });
                 };
 
@@ -2590,8 +2571,8 @@ class CinnamonMenuApplet extends Applet.TextIconApplet {
         }
         // Sort apps and add to applicationsBox
         this._applicationsButtons.sort(function(a, b) {
-            a = Util.latinise(a.app.get_name().toLowerCase());
-            b = Util.latinise(b.app.get_name().toLowerCase());
+            a = Util.latinise(a.name.toLowerCase());
+            b = Util.latinise(b.name.toLowerCase());
             return a > b;
         });
 
@@ -2605,16 +2586,8 @@ class CinnamonMenuApplet extends Applet.TextIconApplet {
 
     _favEnterEvent (button) {
         button.actor.add_style_pseudo_class("hover");
-        if (button instanceof FavoritesButton) {
-            this.selectedAppTitle.set_text(button.app.get_name());
-            if (button.app.get_description())
-                this.selectedAppDescription.set_text(button.app.get_description().split("\n")[0]);
-            else
-                this.selectedAppDescription.set_text("");
-        } else {
-            this.selectedAppTitle.set_text(button.name);
-            this.selectedAppDescription.set_text(button.desc);
-        }
+        this.selectedAppTitle.set_text(button.name);
+        this.selectedAppDescription.set_text(button.description);
     }
 
     _favLeaveEvent (widget, event, button) {
@@ -2785,11 +2758,8 @@ class CinnamonMenuApplet extends Applet.TextIconApplet {
     }
 
     _appEnterEvent(applicationButton) {
-        this.selectedAppTitle.set_text(applicationButton.app.get_name());
-        if (applicationButton.app.get_description())
-            this.selectedAppDescription.set_text(applicationButton.app.get_description());
-        else
-            this.selectedAppDescription.set_text("");
+        this.selectedAppTitle.set_text(applicationButton.name);
+        this.selectedAppDescription.set_text(applicationButton.description);
         this._previousVisibleIndex = this.appBoxIter.getVisibleIndex(applicationButton.actor);
         this._clearPrevSelection(applicationButton.actor);
         applicationButton.actor.style_class = "menu-application-button-selected";
@@ -3092,7 +3062,7 @@ class CinnamonMenuApplet extends Applet.TextIconApplet {
                 this._placesButtons.forEach(item => item.actor.show());
             } else {
                 for (let i = 0; i < this._placesButtons.length; i++) {
-                    let buttonName = this._placesButtons[i].button_name;
+                    let buttonName = this._placesButtons[i].name;
                     if (places.indexOf(buttonName) !== -1) {
                         this._placesButtons[i].actor.show();
                         if (!selectedActor && buttonName === exactMatch)
@@ -3110,7 +3080,7 @@ class CinnamonMenuApplet extends Applet.TextIconApplet {
                 this._recentButtons.forEach(item => item.actor.show());
             } else {
                 for (let i = 0; i < this._recentButtons.length; i++) {
-                    if (recent.indexOf(this._recentButtons[i].button_name) != -1) {
+                    if (recent.indexOf(this._recentButtons[i].name) != -1) {
                         this._recentButtons[i].actor.show();
                     } else {
                         this._recentButtons[i].actor.hide();
@@ -3251,7 +3221,7 @@ class CinnamonMenuApplet extends Applet.TextIconApplet {
             let regexpPattern = new RegExp("\\b"+pattern);
             for (let i in this._applicationsButtons) {
                 let app = this._applicationsButtons[i].app;
-                let latinisedLowerName = Util.latinise(app.get_name().toLowerCase());
+                let latinisedLowerName = Util.latinise(this._applicationsButtons[i].name.toLowerCase());
                 if (latinisedLowerName.match(regexpPattern) !== null) {
                     res.push(app.get_id());
                     if (!exactMatch && latinisedLowerName === pattern)
@@ -3261,9 +3231,8 @@ class CinnamonMenuApplet extends Applet.TextIconApplet {
             if (!exactMatch) {
                 for (let i in this._applicationsButtons) {
                     let app = this._applicationsButtons[i].app;
-                    if (Util.latinise(app.get_name().toLowerCase()).indexOf(pattern)!==-1 ||
-                        (app.get_keywords() && Util.latinise(app.get_keywords().toLowerCase()).indexOf(pattern)!==-1) ||
-                        (app.get_description() && Util.latinise(app.get_description().toLowerCase()).indexOf(pattern)!==-1) ||
+                    if ((app.get_keywords() && Util.latinise(app.get_keywords().toLowerCase()).indexOf(pattern)!==-1) ||
+                        (Util.latinise(this._applicationsButtons[i].description.toLowerCase()).indexOf(pattern)!==-1) ||
                         (app.get_id() && Util.latinise(app.get_id().slice(0, -8).toLowerCase()).indexOf(pattern)!==-1))
                         res.push(app.get_id());
                 }
@@ -3310,8 +3279,8 @@ class CinnamonMenuApplet extends Applet.TextIconApplet {
 
         let recentResults = [];
         for (let i = 0; i < this._recentButtons.length; i++) {
-            if (!(this._recentButtons[i] instanceof RecentClearButton) && this._recentButtons[i].button_name.toLowerCase().indexOf(pattern) != -1)
-                recentResults.push(this._recentButtons[i].button_name);
+            if (!(this._recentButtons[i] instanceof RecentClearButton) && this._recentButtons[i].name.toLowerCase().indexOf(pattern) != -1)
+                recentResults.push(this._recentButtons[i].name);
         }
 
         var acResults = []; // search box autocompletion results
