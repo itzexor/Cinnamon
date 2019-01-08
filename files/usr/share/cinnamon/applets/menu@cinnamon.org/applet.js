@@ -2015,16 +2015,14 @@ class CinnamonMenuApplet extends Applet.TextIconApplet {
         if (this._previousSelectedActor
             && !this._previousSelectedActor.is_finalized()
             && this._previousSelectedActor != actor) {
-            if (this._previousSelectedActor._delegate instanceof ApplicationButton ||
-                this._previousSelectedActor._delegate instanceof RecentButton ||
-                this._previousSelectedActor._delegate instanceof SearchProviderResultButton ||
-                this._previousSelectedActor._delegate instanceof PlaceButton ||
-                this._previousSelectedActor._delegate instanceof RecentClearButton ||
-                this._previousSelectedActor._delegate instanceof TransientButton)
-                this._previousSelectedActor.style_class = "menu-application-button";
-            else if (this._previousSelectedActor._delegate instanceof FavoritesButton ||
-                     this._previousSelectedActor._delegate instanceof SystemButton)
+            if (this._previousSelectedActor._delegate instanceof FavoritesButton ||
+                this._previousSelectedActor._delegate instanceof SystemButton) {
                 this._previousSelectedActor.remove_style_pseudo_class("hover");
+            } else {
+                // ApplicationButton, RecentButton, SearchProviderResultButton
+                // PlaceButton, RecentClearButton, TransientButton
+                this._previousSelectedActor.style_class = "menu-application-button";
+            }
         }
     }
 
