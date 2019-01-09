@@ -111,7 +111,6 @@ class ApplicationContextMenuItem extends PopupMenu.PopupBaseMenuItem {
             this.icon = new St.Icon({ icon_name: iconName, icon_size: 12, icon_type: St.IconType.SYMBOLIC });
             if (this.icon) {
                 this.addActor(this.icon);
-                this.icon.realize();
             }
         }
 
@@ -383,10 +382,6 @@ class ApplicationButton extends GenericApplicationButton {
         this._draggable.connect('drag-end', Lang.bind(this, this._onDragEnd));
         this.isDraggableApp = true;
         this.actor.label_actor = this.label;
-        if (showIcon) {
-            this.icon.realize();
-        }
-        this.label.realize();
     }
 
     get_app_id() {
@@ -442,10 +437,6 @@ class SearchProviderResultButton extends PopupMenu.PopupBaseMenuItem {
         this.label = new St.Label({ text: result.label, style_class: 'menu-application-button-label' });
         this.addActor(this.label);
         this.isDraggableApp = false;
-        if (this.icon) {
-            this.icon.realize();
-        }
-        this.label.realize();
     }
 
     _onButtonReleaseEvent (actor, event) {
@@ -495,9 +486,6 @@ class PlaceButton extends PopupMenu.PopupBaseMenuItem {
                 this.addActor(this.icon);
         }
         this.addActor(this.label);
-        if (showIcon)
-            this.icon.realize();
-        this.label.realize();
     }
 
     _onButtonReleaseEvent (actor, event) {
@@ -559,9 +547,6 @@ class RecentButton extends PopupMenu.PopupBaseMenuItem {
             this.addActor(this.icon);
         }
         this.addActor(this.label);
-        if (showIcon)
-            this.icon.realize();
-        this.label.realize();
     }
 
     _onButtonReleaseEvent (actor, event) {
@@ -725,7 +710,6 @@ class NoRecentDocsButton extends PopupMenu.PopupBaseMenuItem {
         }
 
         this.addActor(this.label);
-        this.label.realize();
 
         this.actor.reactive = reactive;
         this.callback = callback;
@@ -795,12 +779,10 @@ class CategoryButton extends PopupMenu.PopupBaseMenuItem {
 
             if (this.icon) {
                 this.addActor(this.icon);
-                this.icon.realize();
             }
         }
         this.actor.accessible_role = Atk.Role.LIST_ITEM;
         this.addActor(this.label);
-        this.label.realize();
     }
 }
 
@@ -813,12 +795,10 @@ class PlaceCategoryButton extends PopupMenu.PopupBaseMenuItem {
         if (showIcon) {
             this.icon = new St.Icon({icon_name: "folder", icon_size: CATEGORY_ICON_SIZE, icon_type: St.IconType.FULLCOLOR});
             this.addActor(this.icon);
-            this.icon.realize();
         } else {
             this.icon = null;
         }
         this.addActor(this.label);
-        this.label.realize();
     }
 }
 
@@ -831,12 +811,10 @@ class RecentCategoryButton extends PopupMenu.PopupBaseMenuItem {
         if (showIcon) {
             this.icon = new St.Icon({icon_name: "folder-recent", icon_size: CATEGORY_ICON_SIZE, icon_type: St.IconType.FULLCOLOR});
             this.addActor(this.icon);
-            this.icon.realize();
         } else {
             this.icon = null;
         }
         this.addActor(this.label);
-        this.label.realize();
     }
 }
 
@@ -853,7 +831,6 @@ class FavoritesButton extends GenericApplicationButton {
         let icon = app.create_icon_texture(icon_size);
 
         this.addActor(icon);
-        icon.realize();
 
         this._draggable = DND.makeDraggable(this.actor);
         this._draggable.connect('drag-end', Lang.bind(this, this._onDragEnd));
@@ -896,7 +873,6 @@ class SystemButton extends PopupMenu.PopupBaseMenuItem {
         this.icon = new St.Icon({icon_name: icon, icon_size: icon_size, icon_type: St.IconType.FULLCOLOR});
 
         this.addActor(this.icon);
-        this.icon.realize();
     }
 
     _onButtonReleaseEvent(actor, event) {
@@ -1133,7 +1109,6 @@ class CinnamonMenuApplet extends Applet.TextIconApplet {
         this._previousTreeSelectedActor = null;
         this._activeContainer = null;
         this._activeActor = null;
-        this._applicationsBoxWidth = 0;
         this.menuIsOpening = false;
         this._knownApps = []; // Used to keep track of apps that are already installed, so we can highlight newly installed ones
         this._appsWereRefreshed = false;
@@ -1986,9 +1961,6 @@ class CinnamonMenuApplet extends Applet.TextIconApplet {
                     parent !== this._activeContainer && button !== this._previousTreeSelectedActor && !this.searchActive) {
                 this._previousTreeSelectedActor.style_class = "menu-category-button";
             }
-            if (parent != this._activeContainer && parent._vis_iter) {
-                parent._vis_iter.reloadVisible();
-            }
             let _maybePreviousActor = this._activeActor;
             if (_maybePreviousActor && this._activeContainer !== this.categoriesBox) {
                 this._previousSelectedActor = _maybePreviousActor;
@@ -2457,7 +2429,6 @@ class CinnamonMenuApplet extends Applet.TextIconApplet {
 
         this._transientButtons = [];
         this._applicationsButtonFromApp = {};
-        this._applicationsBoxWidth = 0;
 
         this._allAppsCategoryButton = new CategoryButton(null);
         this._addEnterEvent(this._allAppsCategoryButton, Lang.bind(this, function() {
@@ -3006,23 +2977,14 @@ class CinnamonMenuApplet extends Applet.TextIconApplet {
         }
     }
 
-    _resize_actor_iter(actor) {
-        let [min, nat] = actor.get_preferred_width(-1.0);
-        if (nat > this._applicationsBoxWidth){
-            this._applicationsBoxWidth = nat;
-            this.applicationsBox.set_width(this._applicationsBoxWidth + 42); // The answer to life...
-        }
-    }
-
     _resizeApplicationsBox() {
-        this._applicationsBoxWidth = 0;
-        this.applicationsBox.set_width(-1);
-        let child = this.applicationsBox.get_first_child();
-        this._resize_actor_iter(child);
-
-        while ((child = child.get_next_sibling()) != null) {
-            this._resize_actor_iter(child);
+        let width = -1;
+        for (let c of this.applicationsBox.get_children()) {
+            let [min, nat] = c.get_preferred_width(-1.0);
+            if (nat > width)
+                width = nat;
         }
+        this.applicationsBox.set_width(width + 42); // The answer to life...
     }
 
     _displayButtons(appCategory, places, recent, apps, autocompletes, exactMatch){
@@ -3099,7 +3061,6 @@ class CinnamonMenuApplet extends Applet.TextIconApplet {
                 this._addEnterEvent(button, Lang.bind(this, this._appEnterEvent, button));
                 this._transientButtons.push(button);
                 this.applicationsBox.add_actor(button.actor);
-                button.actor.realize();
             }
         }
 
@@ -3313,7 +3274,6 @@ class CinnamonMenuApplet extends Applet.TextIconApplet {
                         this._addEnterEvent(button, Lang.bind(this, this._appEnterEvent, button));
                         this._searchProviderButtons.push(button);
                         this.applicationsBox.add_actor(button.actor);
-                        button.actor.realize();
                         if (this._selectedItemIndex === null) {
                             this.appBoxIter.reloadVisible();
                             let item_actor = this.appBoxIter.getFirstVisible();
