@@ -1034,6 +1034,7 @@ class FavoritesBox {
                     appFavorites.moveFavoriteToPos(id, favPos);
                 else
                     appFavorites.addFavoriteAtPos(id, favPos);
+                this.favBoxIter.reloadVisible();
                 return false;
             }));
 
@@ -1304,7 +1305,6 @@ class CinnamonMenuApplet extends Applet.TextIconApplet {
                 this._applicationsButtons[i].actor.show();
             }
             this._allAppsCategoryButton.actor.style_class = "menu-category-button-selected";
-            this.favBoxIter.reloadVisible();
 
             Mainloop.idle_add(Lang.bind(this, this._initial_cat_selection, n));
         } else {
@@ -1491,10 +1491,6 @@ class CinnamonMenuApplet extends Applet.TextIconApplet {
         let symbol = event.get_key_symbol();
         let item_actor;
         let index = 0;
-        this.appBoxIter.reloadVisible();
-        this.catBoxIter.reloadVisible();
-        this.favBoxIter.reloadVisible();
-        this.sysBoxIter.reloadVisible();
 
         let keyCode = event.get_key_code();
         let modifierState = Cinnamon.get_event_state(event);
@@ -2190,8 +2186,9 @@ class CinnamonMenuApplet extends Applet.TextIconApplet {
         }
 
         this._setCategoriesButtonActive(!this.searchActive);
-
         this._resizeApplicationsBox();
+        this.catBoxIter.reloadVisible();
+        this.appBoxIter.reloadVisible();
     }
 
     _refreshRecent () {
@@ -2410,6 +2407,8 @@ class CinnamonMenuApplet extends Applet.TextIconApplet {
         this._setCategoriesButtonActive(!this.searchActive);
 
         this._resizeApplicationsBox();
+        this.catBoxIter.reloadVisible();
+        this.appBoxIter.reloadVisible();
     }
 
     _refreshApps () {
@@ -2549,8 +2548,9 @@ class CinnamonMenuApplet extends Applet.TextIconApplet {
             this.applicationsBox.add_actor(this._applicationsButtons[i].actor);
             this.applicationsBox.add_actor(this._applicationsButtons[i].menu.actor);
         }
-
         this._appsWereRefreshed = true;
+        this.catBoxIter.reloadVisible();
+        this.appBoxIter.reloadVisible();
     }
 
     _favEnterEvent (button) {
@@ -2593,6 +2593,7 @@ class CinnamonMenuApplet extends Applet.TextIconApplet {
         // }
 
         this._recalc_height();
+        this.favBoxIter.reloadVisible();
     }
 
     _refreshSystemButtons() {
@@ -2660,6 +2661,7 @@ class CinnamonMenuApplet extends Applet.TextIconApplet {
         };
 
         this.systemButtonsBox.add(button.actor, { y_align: St.Align.END, y_fill: false });
+        this.sysBoxIter.reloadVisible();
     }
 
     _loadCategory(dir, top_dir) {
@@ -3070,6 +3072,8 @@ class CinnamonMenuApplet extends Applet.TextIconApplet {
             }
         });
 
+        this.appBoxIter.reloadVisible();
+
         return selectedActor;
     }
 
@@ -3250,7 +3254,6 @@ class CinnamonMenuApplet extends Applet.TextIconApplet {
 
         let selectedActor = this._displayButtons(null, placesResults, recentResults, appResults, acResults, exactMatch);
 
-        this.appBoxIter.reloadVisible();
         if (this.appBoxIter.getNumVisibleChildren() > 0) {
             let item_actor = selectedActor || this.appBoxIter.getFirstVisible();
             this._selectedItemIndex = this.appBoxIter.getAbsoluteIndexOfChild(item_actor);
@@ -3285,6 +3288,7 @@ class CinnamonMenuApplet extends Applet.TextIconApplet {
                         }
                     }
                 }
+                this.appBoxIter.reloadVisible();
             }catch(e){global.log(e);}
         }));
 
