@@ -1,7 +1,8 @@
 const Applet = imports.ui.applet;
 const Mainloop = imports.mainloop;
-const CMenu = imports.gi.CMenu;
+const Signals = imports.signals;
 const Lang = imports.lang;
+const CMenu = imports.gi.CMenu;
 const Cinnamon = imports.gi.Cinnamon;
 const St = imports.gi.St;
 const Clutter = imports.gi.Clutter;
@@ -24,6 +25,7 @@ const Settings = imports.ui.settings;
 const Pango = imports.gi.Pango;
 const AccountsService = imports.gi.AccountsService;
 const SearchProviderManager = imports.ui.searchProviderManager;
+const SignalManager = imports.misc.signalManager;
 
 const MAX_FAV_ICON_SIZE = 32;
 const CATEGORY_ICON_SIZE = 22;
@@ -99,6 +101,74 @@ class VisibleChildIterator {
     }
 }
 
+class MenuItemBase {
+    constructor() {
+        this._signals = new SignalManager.SignalManager();
+
+        this.actor = new St.BoxLayout({ style_class: 'popup-menu-item',
+                                        reactive: true,
+                                        accessible_role: Atk.Role.MENU_ITEM });
+        this.actor._delegate = this;
+
+        this._signals.connect(this.actor, 'button-release-event', Lang.bind(this, this._onButtonReleaseEvent));
+        this._signals.connect(this.actor, 'key-press-event', Lang.bind(this, this._onKeyPressEvent));
+    }
+
+    emit(...args) {
+        this.actor.emit(...args);
+    }
+
+    _onButtonReleaseEvent(actor, event) {
+        if (event.get_button() === 1) {
+            this.activate();
+            return true;
+        }
+        return false;
+    }
+
+    _onKeyPressEvent(actor, event) {
+        let symbol = event.get_key_symbol();
+        if (symbol === Clutter.KEY_space ||
+            symbol === Clutter.KEY_Return ||
+            symbol === Clutter.KP_Enter) {
+            this.activate();
+            return true;
+        }
+        return false;
+    }
+
+    activate() {
+    }
+
+    destroy() {
+        this._signals.disconnectAllSignals();
+        this.label.destroy();
+        this.actor.destroy();
+        this.emit('destroy');
+    }
+
+    addLabel(label, styleClass=null, style=null) {
+        if (this.label) {
+            this.label.set_text(label);
+        } else {
+            this.label = new St.Label({ text: label });
+            if (styleClass)
+                this.label.add_style_class_name(styleClass);
+            if (style)
+                this.label.style = style;
+            this.actor.add_actor(this.label);
+        }
+    }
+
+    addActor(child) {
+        this.actor.add_actor(child);
+    }
+
+    removeActor(child) {
+        this.actor.remove_actor(child);
+    }
+}
+
 class ApplicationContextMenuItem extends PopupMenu.PopupBaseMenuItem {
     constructor(appButton, label, action, iconName) {
         super({focusOnHover: false});
@@ -167,15 +237,19 @@ class ApplicationContextMenuItem extends PopupMenu.PopupBaseMenuItem {
 
 }
 
-class GenericApplicationButton extends PopupMenu.PopupBaseMenuItem {
+class GenericApplicationButton extends MenuItemBase {
     constructor(appsMenuButton, app, withMenu) {
-        super({hover: false});
+        super();
         this.app = app;
         this.appsMenuButton = appsMenuButton;
 
         this.name = this.app.get_name();
         let desc = app.get_description();
         this.description = desc ? desc.split("\n")[0] : "";
+
+        this.appKey = this.app.get_id();
+        if (this.appKey)
+            this.appKey = `${this.name}:${this.description}`;
 
         this.withMenu = withMenu;
         if (this.withMenu){
@@ -186,26 +260,26 @@ class GenericApplicationButton extends PopupMenu.PopupBaseMenuItem {
     }
 
     highlight() {
+        if (this.appsMenuButton._knownApps.includes(this.appKey))
+            return;
+
         this.actor.add_style_pseudo_class('highlighted');
     }
 
     unhighlight() {
-        var app_key = this.app.get_id();
-        if (app_key == null) {
-            app_key = this.name + ":" + this.description;
-        }
-        this.appsMenuButton._knownApps.push(app_key);
+        if (this.appsMenuButton._knownApps.includes(this.appKey))
+            return;
+
+        this.appsMenuButton._knownApps.push(this.appKey);
         this.actor.remove_style_pseudo_class('highlighted');
     }
 
     _onButtonReleaseEvent(actor, event) {
-        if (event.get_button()==1){
-            this.activate(event);
-        }
-        if (event.get_button()==3){
+        if (this.withMenu && event.get_button() == 3){
             this.activateContextMenus(event);
+            return true;
         }
-        return true;
+        return super._onButtonReleaseEvent(actor, event);
     }
 
     activate(event) {
@@ -228,10 +302,8 @@ class GenericApplicationButton extends PopupMenu.PopupBaseMenuItem {
         if (!this.withMenu) return;
 
         if (!this.menu.isOpen){
-            let children = this.menu.box.get_children();
-            for (var i in children) {
-                this.menu.box.remove_actor(children[i]);
-            }
+            this.menu.box.get_children().forEach(c => c.destroy());
+
             let menuItem;
             menuItem = new ApplicationContextMenuItem(this, _("Add to panel"), "add_to_panel", "list-add");
             this.menu.addMenuItem(menuItem);
@@ -283,13 +355,13 @@ class GenericApplicationButton extends PopupMenu.PopupBaseMenuItem {
             this.menu.destroy();
         }
 
-        PopupMenu.PopupBaseMenuItem.prototype.destroy.call(this);
+        super.destroy();
     }
-};
+}
 
-class TransientButton extends PopupMenu.PopupBaseMenuItem {
+class TransientButton extends MenuItemBase {
     constructor(appsMenuButton, pathOrCommand) {
-        super({hover: false});
+        super();
         let displayPath = pathOrCommand;
 
         this.name = "";
@@ -311,7 +383,6 @@ class TransientButton extends PopupMenu.PopupBaseMenuItem {
         }
 
         this.pathOrCommand = pathOrCommand;
-
         this.appsMenuButton = appsMenuButton;
 
         this.file = Gio.file_new_for_path(this.pathOrCommand);
@@ -339,14 +410,7 @@ class TransientButton extends PopupMenu.PopupBaseMenuItem {
         this.isDraggableApp = false;
     }
 
-    _onButtonReleaseEvent (actor, event) {
-        if (event.get_button()==1){
-            this.activate(event);
-        }
-        return true;
-    }
-
-    activate(event) {
+    activate() {
         if (this.handler != null) {
             this.handler.launch([this.file], null);
         } else {
@@ -410,9 +474,9 @@ class ApplicationButton extends GenericApplicationButton {
     }
 }
 
-class SearchProviderResultButton extends PopupMenu.PopupBaseMenuItem {
+class SearchProviderResultButton extends MenuItemBase {
     constructor(appsMenuButton, provider, result) {
-        super({hover: false});
+        super();
         this.provider = provider;
         this.result = result;
 
@@ -439,13 +503,6 @@ class SearchProviderResultButton extends PopupMenu.PopupBaseMenuItem {
         this.isDraggableApp = false;
     }
 
-    _onButtonReleaseEvent (actor, event) {
-        if (event.get_button() == 1){
-            this.activate(event);
-        }
-        return true;
-    }
-
     activate(event) {
         try{
             this.provider.on_result_selected(this.result);
@@ -458,9 +515,9 @@ class SearchProviderResultButton extends PopupMenu.PopupBaseMenuItem {
     }
 }
 
-class PlaceButton extends PopupMenu.PopupBaseMenuItem {
+class PlaceButton extends MenuItemBase {
     constructor(appsMenuButton, place, name, showIcon) {
-        super({hover: false});
+        super();
         this.appsMenuButton = appsMenuButton;
         this.place = place;
 
@@ -488,13 +545,6 @@ class PlaceButton extends PopupMenu.PopupBaseMenuItem {
         this.addActor(this.label);
     }
 
-    _onButtonReleaseEvent (actor, event) {
-        if (event.get_button()==1){
-            this.place.launch();
-            this.appsMenuButton.menu.close();
-        }
-    }
-
     activate(event) {
         this.place.launch();
         this.appsMenuButton.menu.close();
@@ -520,9 +570,9 @@ class RecentContextMenuItem extends PopupMenu.PopupBaseMenuItem {
     }
 }
 
-class RecentButton extends PopupMenu.PopupBaseMenuItem {
+class RecentButton extends MenuItemBase {
     constructor(appsMenuButton, file, showIcon) {
-        super({hover: false});
+        super();
         this.mimeType = file.mimeType;
         this.uri = file.uri;
         this.uriDecoded = file.uriDecoded;
@@ -550,16 +600,14 @@ class RecentButton extends PopupMenu.PopupBaseMenuItem {
     }
 
     _onButtonReleaseEvent (actor, event) {
-        if (event.get_button()==1){
-            this.activate(event);
-        }
-        if (event.get_button()==3){
+        if (this.appsMenuButton.recentContextMenu && event.get_button() == 3){
             this.activateContextMenus(event);
+            return true;
         }
-        return true;
+        return super._onButtonReleaseEvent(actor, event);
     }
 
-    activate(event) {
+    activate() {
         try {
             Gio.app_info_launch_default_for_uri(this.uri, global.create_app_launch_context());
             this.appsMenuButton.menu.close();
@@ -687,13 +735,13 @@ class RecentButton extends PopupMenu.PopupBaseMenuItem {
         if (this.icon)
             this.icon.destroy();
 
-        PopupMenu.PopupBaseMenuItem.prototype.destroy.call(this);
+        super.destroy();
     }
 }
 
-class NoRecentDocsButton extends PopupMenu.PopupBaseMenuItem {
+class NoRecentDocsButton extends MenuItemBase {
     constructor(label, icon, reactive, callback) {
-        super({hover: false});
+        super();
         this.actor.set_style_class_name('menu-application-button');
         this.actor._delegate = this;
 
@@ -715,10 +763,8 @@ class NoRecentDocsButton extends PopupMenu.PopupBaseMenuItem {
         this.callback = callback;
     }
 
-    _onButtonReleaseEvent (actor, event) {
-        if (event.get_button() == 1) {
-            this.callback();
-        }
+    activate() {
+        this.callback();
     }
 }
 
@@ -751,9 +797,9 @@ class RecentClearButton extends PopupMenu.PopupBaseMenuItem {
     }
 }
 
-class CategoryButton extends PopupMenu.PopupBaseMenuItem {
+class CategoryButton extends MenuItemBase {
     constructor(category, showIcon) {
-        super({hover: false});
+        super();
 
         this.actor.set_style_class_name('menu-category-button');
         var label;
@@ -786,9 +832,9 @@ class CategoryButton extends PopupMenu.PopupBaseMenuItem {
     }
 }
 
-class PlaceCategoryButton extends PopupMenu.PopupBaseMenuItem {
+class PlaceCategoryButton extends MenuItemBase {
     constructor(category, showIcon) {
-        super({hover: false});
+        super();
         this.actor.set_style_class_name('menu-category-button');
         this.actor._delegate = this;
         this.label = new St.Label({ text: _("Places"), style_class: 'menu-category-button-label' });
@@ -802,9 +848,9 @@ class PlaceCategoryButton extends PopupMenu.PopupBaseMenuItem {
     }
 }
 
-class RecentCategoryButton extends PopupMenu.PopupBaseMenuItem {
+class RecentCategoryButton extends MenuItemBase {
     constructor(category, showIcon) {
-        super({hover: false});
+        super();
         this.actor.set_style_class_name('menu-category-button');
         this.actor._delegate = this;
         this.label = new St.Label({ text: _("Recent Files"), style_class: 'menu-category-button-label' });
@@ -856,7 +902,7 @@ class FavoritesButton extends GenericApplicationButton {
     }
 }
 
-class SystemButton extends PopupMenu.PopupBaseMenuItem {
+class SystemButton extends MenuItemBase {
     constructor(icon, nbFavorites, name, desc) {
         super({hover: false});
 
@@ -873,12 +919,6 @@ class SystemButton extends PopupMenu.PopupBaseMenuItem {
         this.icon = new St.Icon({icon_name: icon, icon_size: icon_size, icon_type: St.IconType.FULLCOLOR});
 
         this.addActor(this.icon);
-    }
-
-    _onButtonReleaseEvent(actor, event) {
-        if (event.get_button() == 1) {
-            this.activate();
-        }
     }
 }
 
@@ -1714,7 +1754,7 @@ class CinnamonMenuApplet extends Applet.TextIconApplet {
                             index = item_actor.get_parent()._vis_iter.getAbsoluteIndexOfChild(item_actor);
 
                             if (this.favBoxShow) {
-                                item_actor._delegate.emit('enter-event');
+                                item_actor._delegate.emit('enter-event', null);
                                 this._previousSelectedActor = this.categoriesBox.get_child_at_index(index);
                                 item_actor = this.favBoxIter.getFirstVisible();
                             }
@@ -1771,7 +1811,7 @@ class CinnamonMenuApplet extends Applet.TextIconApplet {
                             this._previousTreeSelectedActor = item_actor;
                             index = item_actor.get_parent()._vis_iter.getAbsoluteIndexOfChild(item_actor);
 
-                            item_actor._delegate.emit('enter-event');
+                            item_actor._delegate.emit('enter-event', null);
                             item_actor = (this._previousVisibleIndex != null) ?
                                 this.appBoxIter.getVisibleItem(this._previousVisibleIndex) :
                                 this.appBoxIter.getFirstVisible();
@@ -1817,7 +1857,7 @@ class CinnamonMenuApplet extends Applet.TextIconApplet {
                             this._previousTreeSelectedActor = item_actor;
                             index = item_actor.get_parent()._vis_iter.getAbsoluteIndexOfChild(item_actor);
 
-                            item_actor._delegate.emit('enter-event');
+                            item_actor._delegate.emit('enter-event', null);
                             item_actor = (this._previousVisibleIndex != null) ?
                                 this.appBoxIter.getVisibleItem(this._previousVisibleIndex) :
                                 this.appBoxIter.getFirstVisible();
@@ -1942,7 +1982,7 @@ class CinnamonMenuApplet extends Applet.TextIconApplet {
         if (!item_actor || item_actor === this.searchEntry) {
             return false;
         }
-        item_actor._delegate.emit('enter-event');
+        item_actor._delegate.emit('enter-event', null);
         return true;
     }
 
@@ -1975,7 +2015,6 @@ class CinnamonMenuApplet extends Applet.TextIconApplet {
 
             callback();
         });
-        button.connect('enter-event', _callback);
         button.actor.connect('enter-event', _callback);
     }
 
@@ -1999,7 +2038,7 @@ class CinnamonMenuApplet extends Applet.TextIconApplet {
             this._previousTreeSelectedActor.style_class = "menu-category-button";
 
             if (this._previousTreeSelectedActor._delegate) {
-                this._previousTreeSelectedActor._delegate.emit('leave-event');
+                this._previousTreeSelectedActor._delegate.emit('leave-event', null);
             }
 
             if (actor !== undefined) {
@@ -3261,7 +3300,7 @@ class CinnamonMenuApplet extends Applet.TextIconApplet {
             this._activeContainer = this.applicationsBox;
             this._scrollToButton(item_actor._delegate);
             if (item_actor && item_actor != this.searchEntry) {
-                item_actor._delegate.emit('enter-event');
+                item_actor._delegate.emit('enter-event', null);
             }
         } else {
             this.selectedAppTitle.set_text("");
@@ -3284,7 +3323,7 @@ class CinnamonMenuApplet extends Applet.TextIconApplet {
                             this._selectedItemIndex = this.appBoxIter.getAbsoluteIndexOfChild(item_actor);
                             this._activeContainer = this.applicationsBox;
                             if (item_actor && item_actor != this.searchEntry) {
-                                item_actor._delegate.emit('enter-event');
+                                item_actor._delegate.emit('enter-event', null);
                             }
                         }
                     }
