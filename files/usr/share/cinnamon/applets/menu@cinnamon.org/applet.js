@@ -26,7 +26,6 @@ const Pango = imports.gi.Pango;
 const AccountsService = imports.gi.AccountsService;
 const SearchProviderManager = imports.ui.searchProviderManager;
 const SignalManager = imports.misc.signalManager;
-
 const MAX_FAV_ICON_SIZE = 32;
 const CATEGORY_ICON_SIZE = 22;
 const APPLICATION_ICON_SIZE = 22;
@@ -102,20 +101,23 @@ class VisibleChildIterator {
 }
 
 class MenuItemBase {
-    constructor() {
+    constructor(reactive=true, activatable=true) {
         this._signals = new SignalManager.SignalManager();
 
         this.actor = new St.BoxLayout({ style_class: 'popup-menu-item',
-                                        reactive: true,
+                                        reactive: reactive,
                                         accessible_role: Atk.Role.MENU_ITEM });
         this.actor._delegate = this;
 
-        this._signals.connect(this.actor, 'button-release-event', Lang.bind(this, this._onButtonReleaseEvent));
-        this._signals.connect(this.actor, 'key-press-event', Lang.bind(this, this._onKeyPressEvent));
+        if (reactive && activatable) {
+            this._signals.connect(this.actor, 'button-release-event', Lang.bind(this, this._onButtonReleaseEvent));
+            this._signals.connect(this.actor, 'key-press-event', Lang.bind(this, this._onKeyPressEvent));
+        }
     }
 
     emit(...args) {
-        this.actor.emit(...args);
+        if (this.actor.reactive)
+            this.actor.emit(...args);
     }
 
     _onButtonReleaseEvent(actor, event) {
@@ -144,18 +146,19 @@ class MenuItemBase {
         this._signals.disconnectAllSignals();
         this.label.destroy();
         this.actor.destroy();
-        this.emit('destroy');
     }
 
-    addLabel(label, styleClass=null, style=null) {
+    addLabel(label="", styleClass=null) {
         if (this.label) {
             this.label.set_text(label);
         } else {
-            this.label = new St.Label({ text: label });
+            this.label = new St.Label({ text: label, y_expand: true, y_align: Clutter.ActorAlign.CENTER });
             if (styleClass)
-                this.label.add_style_class_name(styleClass);
-            if (style)
-                this.label.style = style;
+                this.label.set_style_class_name(styleClass);
+            
+            this.label.style = MAX_BUTTON_WIDTH;
+            this.label.clutter_text.ellipsize = Pango.EllipsizeMode.END;
+
             this.actor.add_actor(this.label);
         }
     }
@@ -255,7 +258,7 @@ class GenericApplicationButton extends MenuItemBase {
         if (this.withMenu){
             this.menu = new PopupMenu.PopupSubMenu(this.actor);
             this.menu.actor.set_style_class_name('menu-context-menu');
-            this.menu.connect('open-state-changed', Lang.bind(this, this._subMenuOpenStateChanged));
+            this._signals.connect(this.menu, 'open-state-changed', Lang.bind(this, this._subMenuOpenStateChanged));
         }
     }
 
@@ -392,21 +395,17 @@ class TransientButton extends MenuItemBase {
             let contentType = Gio.content_type_guess(this.pathOrCommand, null);
             let themedIcon = Gio.content_type_get_icon(contentType[0]);
             this.icon = new St.Icon({gicon: themedIcon, icon_size: APPLICATION_ICON_SIZE, icon_type: St.IconType.FULLCOLOR });
-            this.actor.set_style_class_name('menu-application-button');
         } catch (e) {
             this.handler = null;
             let iconName = this.isPath ? 'folder' : 'unknown';
             this.icon = new St.Icon({icon_name: iconName, icon_size: APPLICATION_ICON_SIZE, icon_type: St.IconType.FULLCOLOR});
             // @todo Would be nice to indicate we don't have a handler for this file.
-            this.actor.set_style_class_name('menu-application-button');
         }
+        this.actor.set_style_class_name('menu-application-button');
 
         this.addActor(this.icon);
 
-        this.label = new St.Label({ text: displayPath, style_class: 'menu-application-button-label' });
-        this.label.clutter_text.ellipsize = Pango.EllipsizeMode.END;
-        this.label.set_style(MAX_BUTTON_WIDTH);
-        this.addActor(this.label);
+        this.addLabel(displayPath, 'menu-application-button-label');
         this.isDraggableApp = false;
     }
 
@@ -438,14 +437,11 @@ class ApplicationButton extends GenericApplicationButton {
             this.addActor(this.icon);
         }
 
-        this.label = new St.Label({ text: this.name, style_class: 'menu-application-button-label' });
-        this.label.clutter_text.ellipsize = Pango.EllipsizeMode.END;
-        this.label.set_style(MAX_BUTTON_WIDTH);
-        this.addActor(this.label);
+        this.addLabel(this.name, 'menu-application-button-label', MAX_BUTTON_WIDTH);
+
         this._draggable = DND.makeDraggable(this.actor);
-        this._draggable.connect('drag-end', Lang.bind(this, this._onDragEnd));
+        this._signals.connect(this._draggable, 'drag-end', Lang.bind(this, this._onDragEnd));
         this.isDraggableApp = true;
-        this.actor.label_actor = this.label;
     }
 
     get_app_id() {
@@ -495,11 +491,10 @@ class SearchProviderResultButton extends MenuItemBase {
             this.icon = new St.Icon({gicon: new Gio.FileIcon({file: Gio.file_new_for_path(result.icon_filename)}), icon_size: APPLICATION_ICON_SIZE});
         }
 
-        if (this.icon){
+        if (this.icon)
             this.addActor(this.icon);
-        }
-        this.label = new St.Label({ text: result.label, style_class: 'menu-application-button-label' });
-        this.addActor(this.label);
+        this.addLabel(result.label, 'menu-application-button-label');
+
         this.isDraggableApp = false;
     }
 
@@ -532,17 +527,13 @@ class PlaceButton extends MenuItemBase {
         this.actor.set_style_class_name('menu-application-button');
         this.actor._delegate = this;
 
-        this.label = new St.Label({ text: this.name, style_class: 'menu-application-button-label' });
-        this.label.clutter_text.ellipsize = Pango.EllipsizeMode.END;
-        this.label.set_style(MAX_BUTTON_WIDTH);
         if (showIcon) {
             this.icon = place.iconFactory(APPLICATION_ICON_SIZE);
             if (!this.icon)
                 this.icon = new St.Icon({icon_name: "folder", icon_size: APPLICATION_ICON_SIZE, icon_type: St.IconType.FULLCOLOR});
-            if (this.icon)
-                this.addActor(this.icon);
+            this.addActor(this.icon);
         }
-        this.addActor(this.label);
+        this.addLabel(this.name, 'menu-application-button-label');
     }
 
     activate(event) {
@@ -588,15 +579,12 @@ class RecentButton extends MenuItemBase {
         this.menu = null;
 
         this.actor.set_style_class_name('menu-application-button');
-        this.actor._delegate = this;
-        this.label = new St.Label({ text: this.name, style_class: 'menu-application-button-label' });
-        this.label.clutter_text.ellipsize = Pango.EllipsizeMode.END;
-        this.label.set_style(MAX_BUTTON_WIDTH);
+
         if (showIcon) {
             this.icon = file.createIcon(APPLICATION_ICON_SIZE);
             this.addActor(this.icon);
         }
-        this.addActor(this.label);
+        this.addLabel(this.name, 'menu-application-button-label');
     }
 
     _onButtonReleaseEvent (actor, event) {
@@ -740,66 +728,36 @@ class RecentButton extends MenuItemBase {
 }
 
 class NoRecentDocsButton extends MenuItemBase {
-    constructor(label, icon, reactive, callback) {
-        super();
+    constructor(label) {
+        super(false);
         this.actor.set_style_class_name('menu-application-button');
-        this.actor._delegate = this;
-
-        this.name = label;
-        this.description = "";
-
-        this.label = new St.Label({ text: label, style_class: 'menu-application-button-label' });
-        this.label.clutter_text.ellipsize = Pango.EllipsizeMode.END;
-        this.label.set_style(MAX_BUTTON_WIDTH);
-
-        if (icon != null) {
-            let icon_actor = new St.Icon({ icon_name: icon, icon_type: St.IconType.FULLCOLOR, icon_size: APPLICATION_ICON_SIZE});
-            this.addActor(icon_actor);
-        }
-
-        this.addActor(this.label);
-
-        this.actor.reactive = reactive;
-        this.callback = callback;
-    }
-
-    activate() {
-        this.callback();
+        this.addLabel(label, 'menu-application-button-label');
     }
 }
 
-class RecentClearButton extends PopupMenu.PopupBaseMenuItem {
+class RecentClearButton extends MenuItemBase {
     constructor(appsMenuButton) {
-        super({hover: false});
+        super();
         this.appsMenuButton = appsMenuButton;
         this.actor.set_style_class_name('menu-application-button');
 
         this.name = _("Clear list");
         this.description = _("Clear all recent documents");
 
-        this.actor._delegate = this;
-        this.label = new St.Label({ text: this.name, style_class: 'menu-application-button-label' });
         this.icon = new St.Icon({ icon_name: 'edit-clear', icon_type: St.IconType.SYMBOLIC, icon_size: APPLICATION_ICON_SIZE });
         this.addActor(this.icon);
-        this.addActor(this.label);
+        this.addLabel(this.name, 'menu-application-button-label');
     }
 
-    _onButtonReleaseEvent (actor, event) {
-        if (event.get_button()==1){
-            this.activate(event);
-        }
-    }
-
-    activate(event) {
+    activate() {
         this.appsMenuButton.menu.close();
-        let GtkRecent = new Gtk.RecentManager();
-        GtkRecent.purge_items();
+        (new Gtk.RecentManager()).purge_items();
     }
 }
 
 class CategoryButton extends MenuItemBase {
     constructor(category, showIcon) {
-        super();
+        super(true, false);
 
         this.actor.set_style_class_name('menu-category-button');
         var label;
@@ -818,8 +776,6 @@ class CategoryButton extends MenuItemBase {
         } else
             label = _("All Applications");
 
-        this.actor._delegate = this;
-        this.label = new St.Label({ text: label, style_class: 'menu-category-button-label' });
         if (category && this.icon_name) {
             this.icon = new St.Icon({gicon: icon, icon_size: CATEGORY_ICON_SIZE, icon_type: St.IconType.FULLCOLOR});
 
@@ -828,39 +784,36 @@ class CategoryButton extends MenuItemBase {
             }
         }
         this.actor.accessible_role = Atk.Role.LIST_ITEM;
-        this.addActor(this.label);
+        this.addLabel(label, 'menu-category-button-label');
     }
 }
 
 class PlaceCategoryButton extends MenuItemBase {
     constructor(category, showIcon) {
-        super();
+        super(true, false);
         this.actor.set_style_class_name('menu-category-button');
         this.actor._delegate = this;
-        this.label = new St.Label({ text: _("Places"), style_class: 'menu-category-button-label' });
         if (showIcon) {
             this.icon = new St.Icon({icon_name: "folder", icon_size: CATEGORY_ICON_SIZE, icon_type: St.IconType.FULLCOLOR});
             this.addActor(this.icon);
         } else {
             this.icon = null;
         }
-        this.addActor(this.label);
+        this.addLabel(_("Places"), 'menu-category-button-label');
     }
 }
 
 class RecentCategoryButton extends MenuItemBase {
     constructor(category, showIcon) {
-        super();
+        super(true, false);
         this.actor.set_style_class_name('menu-category-button');
-        this.actor._delegate = this;
-        this.label = new St.Label({ text: _("Recent Files"), style_class: 'menu-category-button-label' });
         if (showIcon) {
             this.icon = new St.Icon({icon_name: "folder-recent", icon_size: CATEGORY_ICON_SIZE, icon_type: St.IconType.FULLCOLOR});
             this.addActor(this.icon);
         } else {
             this.icon = null;
         }
-        this.addActor(this.label);
+        this.addLabel(_("Recent Files"), 'menu-category-button-label');
     }
 }
 
@@ -2360,7 +2313,7 @@ class CinnamonMenuApplet extends Applet.TextIconApplet {
                 }
 
                 if (new_button == null) {
-                    new_button = new NoRecentDocsButton(_("No recent documents"), null, false, null);
+                    new_button = new NoRecentDocsButton(_("No recent documents"));
                 }
 
                 this.noRecentDocuments = true;
@@ -3030,87 +2983,47 @@ class CinnamonMenuApplet extends Applet.TextIconApplet {
     }
 
     _displayButtons(appCategory, places, recent, apps, autocompletes, exactMatch){
+        // destroy temporary buttons
+        Util.each(this._transientButtons, item => item.destroy());
+        this._transientButtons = [];
+        Util.each(this._searchProviderButtons, item => item.destroy());
+        this._searchProviderButtons = [];
+
         let selectedActor = null;
         if (appCategory) {
-            if (appCategory === -1) {
-                this._applicationsButtons.forEach(item => item.actor.show());
-            } else {
-                this._applicationsButtons.forEach(item => {
-                    if (item.category.indexOf(appCategory) != -1) {
-                        item.actor.show();
-                    } else {
-                        item.actor.hide();
-                    }
-                });
-            }
+            Util.each(this._applicationsButtons, item => { item.actor.visible = appCategory === -1 || item.category.includes(appCategory) });
         } else if (apps) {
-            for (let i = 0; i < this._applicationsButtons.length; i++) {
-                let button = this._applicationsButtons[i];
-                let appId = button.app.get_id();
-                if (apps.indexOf(appId) !== -1) {
-                    button.actor.show();
-                    if (appId === exactMatch) {
-                        selectedActor = button.actor;
-                    }
-                } else {
-                    button.actor.hide();
-                }
-            }
+            Util.each(this._applicationsButtons, item => {
+                let appId = item.app.get_id();
+                item.actor.visible = apps.includes(appId);
+                if (appId === exactMatch)
+                    selectedActor = item.actor;
+            });
         } else {
-            this._applicationsButtons.forEach(item => item.actor.hide());
+            Util.each(this._applicationsButtons, item => { item.actor.visible = false });
         }
+
         if (places) {
-            if (places === -1) {
-                this._placesButtons.forEach(item => item.actor.show());
-            } else {
-                for (let i = 0; i < this._placesButtons.length; i++) {
-                    let buttonName = this._placesButtons[i].name;
-                    if (places.indexOf(buttonName) !== -1) {
-                        this._placesButtons[i].actor.show();
-                        if (!selectedActor && buttonName === exactMatch)
-                            selectedActor = this._placesButtons[i].actor;
-                    } else {
-                        this._placesButtons[i].actor.hide();
-                    }
-                }
-            }
+            Util.each(this._placesButtons, item => {
+                item.actor.visible =  places === -1 || places.includes(item.name)
+                if (!selectedActor && item.name === exactMatch)
+                    selectedActor = item.actor;
+            });
         } else {
-            this._placesButtons.forEach(item => item.actor.hide());
+            Util.each(this._placesButtons, item => { item.actor.visible = false });
         }
-        if (recent) {
-            if (recent == -1) {
-                this._recentButtons.forEach(item => item.actor.show());
-            } else {
-                for (let i = 0; i < this._recentButtons.length; i++) {
-                    if (recent.indexOf(this._recentButtons[i].name) != -1) {
-                        this._recentButtons[i].actor.show();
-                    } else {
-                        this._recentButtons[i].actor.hide();
-                    }
-                }
-            }
-        } else {
-            this._recentButtons.forEach(item => item.actor.hide());
-        }
+
+        Util.each(this._recentButtons, item => { item.actor.visible = recent == null ? false : recent === -1 || recent.includes(item.name) });
+
         if (autocompletes) {
-
-            this._transientButtons.forEach(item => item.actor.destroy());
-            this._transientButtons = [];
-
-            for (let i = 0; i < autocompletes.length; i++) {
-                let button = new TransientButton(this, autocompletes[i]);
+            Util.each(autocompletes, item => {
+                let button = new TransientButton(this, item);
                 button.actor.connect('leave-event', Lang.bind(this, this._appLeaveEvent, button));
                 this._addEnterEvent(button, Lang.bind(this, this._appEnterEvent, button));
                 this._transientButtons.push(button);
                 this.applicationsBox.add_actor(button.actor);
-            }
+            });
         }
-
-        this._searchProviderButtons.forEach(item => {
-            if (item.actor.visible) {
-                item.actor.hide();
-            }
-        });
 
         this.appBoxIter.reloadVisible();
 
