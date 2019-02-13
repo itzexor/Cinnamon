@@ -110,17 +110,6 @@ class VisibleChildIterator {
 /**
  * SimpleMenuItem type strings in use:
  * -------------------------------------------------
- * app              ApplicationButton
- * category         CategoryButton
- * fav              FavoritesButton
- * no-recent        "No recent documents" button
- * none             Default type
- * place            PlaceButton
- * recent           RecentsButton
- * recent-clear     "Clear recent documents" button
- * search-provider  SearchProviderResultButton
- * system           SystemButton
- * transient        TransientButton
  */
 
 /**
@@ -388,7 +377,10 @@ class GenericApplicationButton extends SimpleMenuItem {
                         type: type,
                         withMenu: withMenu,
                         styleClass: styleClass,
-                        app: app });
+                        app: app,
+                        appId: app.get_id().slice(0, -8),
+                        keywords: app.get_keywords() || "",
+                        type: type });
     }
 
     highlight() {
@@ -1032,6 +1024,8 @@ class CinnamonMenuApplet extends Applet.TextIconApplet {
         this._searchActiveIcon = new St.Icon({ style_class: 'menu-search-entry-icon',
             icon_name: 'edit-clear',
             icon_type: St.IconType.SYMBOLIC });
+
+        this._appSortArray = []; // holds applicationsbox children in the original sort order
         this._searchIconClickedId = 0;
         this._applicationsButtons = [];
         this._favoritesButtons = [];
@@ -2539,6 +2533,9 @@ class CinnamonMenuApplet extends Applet.TextIconApplet {
             actor.remove_style_pseudo_class("hover");
             actor.show();
         }
+
+        this.selectedAppTitle.set_text("");
+        this.selectedAppDescription.set_text("");
     }
 
     _select_category (name) {
@@ -2569,7 +2566,7 @@ class CinnamonMenuApplet extends Applet.TextIconApplet {
         this.applicationsBox.set_width(width + 42); // The answer to life...
     }
 
-
+    /**
     /**
      * Reset the ApplicationsBox to a specific category or list of buttons.
      * @param {String} category     (optional) The button type or application category to be displayed.
@@ -2636,6 +2633,19 @@ class CinnamonMenuApplet extends Applet.TextIconApplet {
         }
     }
 
+    _saveAppSort() {
+        this._appSortArray = this.applicationsBox.get_children();
+    }
+
+    _restoreAppSort(resetSortCache=true) {
+        Util.each(this._appSortArray, (c, i) => {
+            if (!c.is_finalized())
+                this.applicationsBox.set_child_at_index(c, i);
+        });
+        if (resetSortCache)
+            this._appSortArray = [];
+    }
+
     resetSearch(){
         this.searchEntry.set_text("");
     }
@@ -2650,11 +2660,17 @@ class CinnamonMenuApplet extends Applet.TextIconApplet {
             return;
         this._previousSearchPattern = searchString;
 
+        let searchWasActive = this.searchActive;
         this.searchActive = searchActive;
         this._fileFolderAccessActive = searchActive && this.searchFilesystem;
         this._clearAllSelections();
 
         if (searchActive) {
+            if (!searchWasActive)
+                this._saveAppSort();
+            else
+                this._restoreAppSort(false);
+
             this.searchEntry.set_secondary_icon(this._searchActiveIcon);
             if (!this._searchIconClickedId) {
                 this._searchIconClickedId =
@@ -2663,6 +2679,7 @@ class CinnamonMenuApplet extends Applet.TextIconApplet {
                         this._select_category();
                     });
             }
+
             this._setCategoriesButtonActive(false);
             this.lastSelectedCategory = "search"
 
@@ -2673,102 +2690,90 @@ class CinnamonMenuApplet extends Applet.TextIconApplet {
             this._searchIconClickedId = 0;
             this.searchEntry.set_secondary_icon(this._searchInactiveIcon);
             this._previousSearchPattern = "";
+
             this._setCategoriesButtonActive(true);
-            this._select_category();
-            this._allAppsCategoryButton.actor.style_class = "menu-category-button-selected";
-            this._activeContainer = null;
-            this.selectedAppTitle.set_text("");
-            this.selectedAppDescription.set_text("");
+            this._buttonEnterEvent(this._allAppsCategoryButton);
+
+            /* restore sort after selecting all apps as _displayButtons will
+             * clear any temporary search result buttons */
+            this._restoreAppSort();
         }
     }
 
-    _matchNames(buttons, pattern){
-        let res = [];
-        let exactMatch = null;
-        for (let i = 0; i < buttons.length; i++) {
-            let name = buttons[i].name;
-            let lowerName = name.toLowerCase();
-            if (lowerName.includes(pattern))
-                res.push(buttons[i]);
-            if (!exactMatch && lowerName === pattern)
-                exactMatch = buttons[i];
-        }
-        return [res, exactMatch];
-    }
-
-    _listApplications(pattern){
-        if (!pattern)
-            return [[], null];
-
-        let res = [];
-        let exactMatch = null;
-        let regexpPattern = new RegExp("\\b" + Util.escapeRegExp(pattern));
-
-        for (let i in this._applicationsButtons) {
-            let app = this._applicationsButtons[i].app;
-            let latinisedLowerName = Util.latinise(app.get_name().toLowerCase());
-            if (latinisedLowerName.match(regexpPattern) !== null) {
-                res.push(this._applicationsButtons[i]);
-                if (!exactMatch && latinisedLowerName === pattern)
-                    exactMatch = this._applicationsButtons[i];
-            }
-        }
-
-        if (!exactMatch) {
-            for (let i in this._applicationsButtons) {
-                let app = this._applicationsButtons[i].app;
-                if ((Util.latinise(app.get_name().toLowerCase()).split(' ').some(word => word.startsWith(pattern))) || // match on app name
-                    (app.get_keywords() && Util.latinise(app.get_keywords().toLowerCase()).split(';').some(keyword => keyword.startsWith(pattern))) || // match on keyword
-                    (app.get_description() && Util.latinise(app.get_description().toLowerCase()).split(' ').some(word => word.startsWith(pattern))) || // match on description
-                    (app.get_id() && Util.latinise(app.get_id().slice(0, -8).toLowerCase()).startsWith(pattern))) { // match on app ID
-                    res.push(this._applicationsButtons[i]);
-                }
-            }
-        }
-
-        return [res, exactMatch];
-    }
-
-    _doSearch(rawPattern){
-        let pattern = Util.latinise(rawPattern.toLowerCase());
-
-        this._searchTimeoutId = 0;
+    _doSearch(pattern){
         this._activeContainer = null;
         this._activeActor = null;
         this._selectedItemIndex = null;
         this._previousTreeSelectedActor = null;
         this._previousSelectedActor = null;
 
-        let [buttons, exactMatch] = this._listApplications(pattern);
+        let rePattern = Util.escapeRegExp(Util.latinise(pattern.toLowerCase()));
+        // when we don't get a loose match. we could use normal string functions for half of these
+        // but case-insensitive re is easier to do.
+        let regExps = [
+            new RegExp(`${rePattern}`, 'i'),        // anywhere
+            new RegExp(`\\b${rePattern}`, 'i'),     // beginning of word
+            new RegExp(`\\b${rePattern}\\b`, 'i'),  // entire word
+            new RegExp(`^${rePattern}`, 'i'),       // beginning of field
+            new RegExp(`^${rePattern}$`, 'i'),      // entire field
+        ];
+        let nRegexs = regExps.length - 1;
 
-        let result = this._matchNames(this._placesButtons, pattern);
-        buttons = buttons.concat(result[0]);
-        exactMatch = exactMatch || result[1];
+        // gets button matches pre-sorted by type (app, place, recent), then alphabetically
+        let results = [];
+        Util.each(this.applicationsBox.get_children(), c => {
+            let button = c._delegate;
+            if (!(button instanceof SimpleMenuItem) ||
+                !'app recent place'.includes(button.type))
+                return;
 
-        result = this._matchNames(this._recentButtons, pattern);
-        buttons = buttons.concat(result[0]);
-        exactMatch = exactMatch || result[1];
+            let match, score;
+            for (let i = 0; i <= nRegexs; i++) {
+                score = nRegexs - i;
+                if (regExps[i].test(button.name)) {
+                    match = button;
+                } else if (button.type === 'app') {
+                    if (regExps[i].test(button.appId)) {
+                        match = button;
+                        score += nRegexs + 0.1;
+                    } else if (regExps[i].test(button.description) ||
+                               regExps[i].test(button.keywords)) {
+                        match = button;
+                        score += nRegexs + 0.2;
+                    }
+                }
+                if (!match)
+                    break;
+            }
 
-        var acResults = []; // search box autocompletion results
-        if (this.searchFilesystem) {
-            // Don't use the pattern here, as filesystem is case sensitive
-            acResults = this._getCompletions(rawPattern);
-        }
+            if (match)
+                results.push([button, score]);
+        });
+
+        /* Sort by score and convert to pure button list. Since we're
+         * iterating the sorted list to convert to buttons, we can sort
+         * the applicationsBox at this time as well. */
+        results.sort((a, b) => a[1] - b[1]);
+        let buttons = results.map((r, i) => {
+            this.applicationsBox.set_child_at_index(r[0].actor, i);
+            return r[0];
+        });
+
+        // try to get some path completion results
+        let acResults = this.searchFilesystem ? this._getCompletions(pattern) : [];
 
         this._displayButtons(null, buttons, acResults);
 
+        // select the first item if we had any matches
         if (buttons.length || acResults.length) {
             this.appBoxIter.reloadVisible();
-            let item_actor = exactMatch ? exactMatch.actor : this.appBoxIter.getFirstVisible();
-            this._selectedItemIndex = this.appBoxIter.getAbsoluteIndexOfChild(item_actor);
+            this._selectedItemIndex = 0;
             this._activeContainer = this.applicationsBox;
-            this._scrollToButton(item_actor._delegate);
-            this._buttonEnterEvent(item_actor._delegate);
-        } else {
-            this.selectedAppTitle.set_text("");
-            this.selectedAppDescription.set_text("");
+            this._scrollToButton();
+            this._buttonEnterEvent(this.appBoxIter.getFirstVisible()._delegate);
         }
 
+        // search provider results are added later, at the end of the results list.
         SearchProviderManager.launch_all(pattern, Lang.bind(this, function(provider, results) {
             try {
                 for (var i in results) {
