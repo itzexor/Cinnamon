@@ -92,14 +92,6 @@ class LookingGlassProxy:
                 pass
         return (False, "")
 
-    def GetMemoryInfo(self):
-        if self._proxy:
-            try:
-                return self._proxy.GetMemoryInfo('()')
-            except:
-                pass
-        return (False, 0, {})
-
     def FullGc(self):
         if self._proxy:
             try:

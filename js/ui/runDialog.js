@@ -11,6 +11,7 @@ const Cinnamon = imports.gi.Cinnamon;
 const Signals = imports.signals;
 
 const FileUtils = imports.misc.fileUtils;
+const LookingGlass = imports.ui.lookingGlass;
 const Main = imports.ui.main;
 const ModalDialog = imports.ui.modalDialog;
 const CinnamonEntry = imports.ui.cinnamonEntry;
@@ -35,7 +36,7 @@ const ALIASES_KEY = 'run-dialog-aliases';
 const DIALOG_GROW_TIME = 0.1;
 const MAX_COMPLETIONS = 40;
 
-const DEVEL_COMMANDS = { 'lg': x => Main.createLookingGlass().open(),
+const DEVEL_COMMANDS = { 'lg': x => LookingGlass.toggle(),
                          'r': x => global.reexec_self(),
                          'restart': x => global.reexec_self(),
                          'debugexit': x => Meta.quit(Meta.ExitCode.ERROR),

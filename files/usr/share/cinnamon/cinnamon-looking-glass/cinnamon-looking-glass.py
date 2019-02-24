@@ -312,7 +312,7 @@ class MelangeApp(dbus.service.Object):
         dbus.service.Object.__init__ (self, dbus.SessionBus (), MELANGE_DBUS_PATH, MELANGE_DBUS_NAME)
 
     @dbus.service.method (MELANGE_DBUS_NAME, in_signature='', out_signature='')
-    def show(self):
+    def toggle(self):
         if self.window.get_visible():
             if self._minimized:
                 self.window.present()
@@ -321,15 +321,6 @@ class MelangeApp(dbus.service.Object):
         else:
             self.showAndFocus()
 
-    @dbus.service.method (MELANGE_DBUS_NAME, in_signature='', out_signature='')
-    def hide(self):
-        self.window.hide()
-
-    @dbus.service.method (MELANGE_DBUS_NAME, in_signature='', out_signature='b')
-    def getVisible(self):
-        return self.window.get_visible()
-
-    @dbus.service.method (MELANGE_DBUS_NAME, in_signature='', out_signature='')
     def doInspect(self):
         if self.lookingGlassProxy:
             self.lookingGlassProxy.StartInspector()

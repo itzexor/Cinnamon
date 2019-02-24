@@ -1,4 +1,20 @@
 // -*- mode: js; js-indent-level: 4; indent-tabs-mode: nil -*-
+/**
+ * FILE:lookingGlass.js
+ * @short_description: Cinnamon's inspector and js command line
+ *
+ * The user interface for lookingGlass.js is the python program Melange.
+ * This file implements the actual inspection code and exposes it over dbus
+ * for Melange.
+ *
+ * Since we have to export js value representations over dbus, and have to avoid
+ * special js types, we have a custom type system in use in addition to the standard
+ * js type names:
+ *  - 'array': should only show enumerable properties
+ *  - 'prototype': prototypes for gobject and gboxed - not inspectable
+ *  - 'importer': file importers - not inspectable
+ *  - GTypes - inspected via GIRepository
+ */
 
 const Cinnamon = imports.gi.Cinnamon;
 const Clutter = imports.gi.Clutter;
@@ -17,33 +33,79 @@ const Extension = imports.ui.extension;
 const History = imports.misc.history;
 const Main = imports.ui.main;
 
-/* Imports...feel free to add here as needed */
-var commandHeader = 'const Clutter = imports.gi.Clutter; ' +
-                    'const GLib = imports.gi.GLib; ' +
-                    'const Gtk = imports.gi.Gtk; ' +
-                    'const Mainloop = imports.mainloop; ' +
-                    'const Meta = imports.gi.Meta; ' +
-                    'const Cinnamon = imports.gi.Cinnamon; ' +
-                    'const Main = imports.ui.main; ' +
-                    'const Lang = imports.lang; ' +
-                    'const Tweener = imports.ui.tweener; ' +
-                    /* Utility functions...we should probably be able to use these
-                     * in Cinnamon core code too. */
-                    'const stage = global.stage; ' +
-                    /* Special lookingGlass functions */
-                    'const it = Main.lookingGlass.getIt(); ' +
-                    'const a = Lang.bind(Main.lookingGlass, Main.lookingGlass.getWindowApp); '+
-                    'const w = Lang.bind(Main.lookingGlass, Main.lookingGlass.getWindow); '+
-                    'const r = Lang.bind(Main.lookingGlass, Main.lookingGlass.getResult); ';
-
 const HISTORY_KEY = 'looking-glass-history';
 
-/* fake types for special cases:
- *  -'array': should only show enumerable properties
- *  -'prototype': prototypes for gobject and gboxed - not inspectable
- *  -'importer': file importers - not inspectable
- *  -GTypes - inspected via GIRepository
- */
+// dbus interfaces
+const MELANGE_IFACE =
+    '<node> \
+        <interface name="org.Cinnamon.Melange"> \
+            <method name="toggle" /> \
+        </interface> \
+     </node>';
+
+const LG_IFACE =
+    '<node> \
+        <interface name="org.Cinnamon.LookingGlass"> \
+            <method name="Eval"> \
+                <arg type="s" direction="in" name="code"/> \
+            </method> \
+            <method name="GetResults"> \
+                <arg type="b" direction="out" name="success"/> \
+                <arg type="aa{ss}" direction="out" name="array of dictionary containing keys: command, type, object, index"/> \
+            </method> \
+            <method name="AddResult"> \
+                <arg type="s" direction="in" name="code"/> \
+            </method> \
+            <method name="GetErrorStack"> \
+                <arg type="b" direction="out" name="success"/> \
+                <arg type="aa{ss}" direction="out" name="array of dictionary containing keys: timestamp, category, message"/> \
+            </method> \
+            <method name="FullGc"> \
+            </method> \
+            <method name="Inspect"> \
+                <arg type="s" direction="in" name="code"/> \
+                <arg type="b" direction="out" name="success"/> \
+                <arg type="aa{ss}" direction="out" name="array of dictionary containing keys: name, type, value, shortValue"/> \
+            </method> \
+            <method name="GetLatestWindowList"> \
+                <arg type="b" direction="out" name="success"/> \
+                <arg type="aa{ss}" direction="out" name="array of dictionary containing keys: id, title, wmclass, app"/> \
+            </method> \
+            <method name="StartInspector"> \
+            </method> \
+            <method name="GetExtensionList"> \
+                <arg type="b" direction="out" name="success"/> \
+                <arg type="aa{ss}" direction="out" name="array of dictionary containing keys: status, name, description, uuid, folder, url, type"/> \
+            </method> \
+            <method name="ReloadExtension"> \
+                <arg type="s" direction="in" name="uuid"/> \
+                <arg type="s" direction="in" name="type"/> \
+            </method> \
+            <signal name="LogUpdate"></signal> \
+            <signal name="WindowListUpdate"></signal> \
+            <signal name="ResultUpdate"></signal> \
+            <signal name="InspectorDone"></signal> \
+            <signal name="ExtensionListUpdate"></signal> \
+        </interface> \
+    </node>';
+
+// prepended to any user js for convenience
+const COMMAND_HEADER =
+`const Cinnamon = imports.gi.Cinnamon;
+const Clutter = imports.gi.Clutter;
+const GLib = imports.gi.GLib;
+const Gtk = imports.gi.Gtk;
+const Mainloop = imports.mainloop;
+const Meta = imports.gi.Meta;
+
+const LookingGlass = imports.ui.lookingGlass;
+const Main = imports.ui.main;
+const Tweener = imports.ui.tweener;
+
+const it = LookingGlass.it;
+const a = LookingGlass.getWindowApp;
+const r = LookingGlass.getResult;
+const w = LookingGlass.getWindow;`;
 
 // primitive js types and certain objects to avoid inspecting
 // keep in sync with page_inspect.py
@@ -65,88 +127,292 @@ const GI_RE = /^\[(?:boxed|object) (instance|prototype) (?:proxy|of) (?:GType|GI
 const IMPORT_RE = /^\[(?:GjsFileImporter \w+|object GjsModule gi)\]$/;
 const DASH_RE = /-/g;
 
-// returns [typeString, valueString] for any object
-function getObjInfo(o) {
-    let type, value;
+/*************************************************
+ * window list that's exposed over dbus          *
+ *************************************************/
+class WindowList {
+    constructor(onUpdatedCallback) {
+        this.lastId = 0;
+        this.latestWindowList = [];
+        this.onUpdated = onUpdatedCallback;
 
-    if (o === null)
-        type = 'null';
-    else if (o === undefined)
-        type = 'undefined';
+        let tracker = Cinnamon.WindowTracker.get_default();
+        global.display.connect('window-created', Lang.bind(this, this._updateWindowList));
+        tracker.connect('tracked-windows-changed', Lang.bind(this, this._updateWindowList));
+    }
 
-    if (type) {
-        value = `[${type}]`;
-    } else {
-        // try to detect detailed type by string representation
-        if (o instanceof GObject.Object) {
-            // work around Clutter.Actor.prototype.toString override
-            value = GObject.Object.prototype.toString.call(o);
-        } else {
-            // toString() throws when called on ByteArray(GBytes wrapper object in cjs)
-            try {
-                value = o.toString();
-            } catch (e) {
-                value = '[error getting value]';
+    getWindowById(id) {
+        let windows = global.get_window_actors();
+        for (let i = 0; i < windows.length; i++) {
+            let metaWindow = windows[i].metaWindow;
+            if (metaWindow._lgId === id)
+                return metaWindow;
+        }
+        return null;
+    }
+
+    _updateWindowList() {
+        let windows = global.get_window_actors();
+        let tracker = Cinnamon.WindowTracker.get_default();
+
+        let oldWindowList = this.latestWindowList;
+        this.latestWindowList = [];
+        for (let i = 0; i < windows.length; i++) {
+            let metaWindow = windows[i].metaWindow;
+
+            // only track "interesting" windows
+            if (!Main.isInteresting(metaWindow))
+                continue;
+
+            // Avoid multiple connections
+            if (!metaWindow._lookingGlassManaged) {
+                metaWindow.connect('unmanaged', Lang.bind(this, this._updateWindowList));
+                metaWindow._lookingGlassManaged = true;
+
+                metaWindow._lgId = this.lastId;
+                this.lastId++;
             }
+
+            let lgInfo = {
+                id: metaWindow._lgId.toString(),
+                title: metaWindow.title + '',
+                wmclass: metaWindow.get_wm_class() + '',
+                app: '' };
+
+            let app = tracker.get_window_app(metaWindow);
+            if (app != null && !app.is_window_backed()) {
+                lgInfo.app = app.get_id() + '';
+            } else {
+                lgInfo.app = '<untracked>';
+            }
+
+            this.latestWindowList.push(lgInfo);
         }
 
-        type = typeof(o);
-        if (type === 'object') {
-            if (value.search(IMPORT_RE) != -1) {
-                type = 'importer';
-            } else if (o instanceof GIRepositoryNamespace) {
-                type = 'GIRepositoryNamespace';
-            } else {
-                let matches = value.match(GI_RE);
-                if (matches) {
-                    if (matches[1] === 'prototype') {
-                        type = 'prototype';
-                    } else {
-                        // 'instance'
-                        type = GObject.type_name(o.constructor.$gtype);
-                    }
-                } else if ('$gtype' in o) {
-                    type = GObject.type_name(o.$gtype);
-                } else if (Array.isArray(o)) {
-                    type = 'array';
+        // Make sure the list changed before notifying listeners
+        let changed = oldWindowList.length != this.latestWindowList.length;
+        if (!changed) {
+            for (let i = 0; i < oldWindowList.length; i++) {
+                if (oldWindowList[i].id != this.latestWindowList[i].id) {
+                    changed = true;
+                    break;
                 }
             }
         }
+        if (changed)
+            this.onUpdated();
+    }
+};
+Signals.addSignalMethods(WindowList.prototype);
 
-        // make empty strings/arrays obvious
-        if (value === '')
-            value = '[empty]';
+
+/*************************************************
+ * inspector for user actor picking              *
+ *************************************************/
+class Inspector {
+    constructor() {
+        let container = new Cinnamon.GenericContainer({ width: 0,
+                                                     height: 0 });
+        container.connect('allocate', Lang.bind(this, this._allocate));
+        Main.uiGroup.add_actor(container);
+
+        let eventHandler = new St.BoxLayout({ name: 'LookingGlassDialog',
+                                              vertical: true,
+                                              reactive: true });
+        this._eventHandler = eventHandler;
+        Main.pushModal(this._eventHandler);
+        container.add_actor(eventHandler);
+        this._displayText = new St.Label();
+        eventHandler.add(this._displayText, { expand: true });
+        this._passThroughText = new St.Label({style: 'text-align: center;'});
+        eventHandler.add(this._passThroughText, { expand: true });
+
+        this._borderPaintTarget = null;
+        this._borderPaintId = null;
+        eventHandler.connect('destroy', Lang.bind(this, this._onDestroy));
+        this._capturedEventId = global.stage.connect('captured-event', Lang.bind(this, this._onCapturedEvent));
+
+        // this._target is the actor currently shown by the inspector.
+        // this._pointerTarget is the actor directly under the pointer.
+        // Normally these are the same, but if you use the scroll wheel
+        // to drill down, they'll diverge until you either scroll back
+        // out, or move the pointer outside of _pointerTarget.
+        this._target = null;
+        this._pointerTarget = null;
+        this.passThroughEvents = false;
+        this._updatePassthroughText();
     }
 
-    return [type, value];
-}
+    _addBorderPaintHook(actor) {
+        let signalId = actor.connect_after('paint',
+            function () {
+                let color = new Cogl.Color();
+                color.init_from_4ub(0xff, 0, 0, 0xc4);
+                Cogl.set_source_color(color);
 
-// returns an array of dictionaries conforming to the Inspect dbus schema
-function getObjKeyInfos(obj) {
-    let [type, ] = getObjInfo(obj);
-    if (NON_INSPECTABLE_TYPES.includes(type))
-        return [];
+                let geom = actor.get_allocation_geometry();
+                let width = 2;
 
-    let keys = [];
-    if (['array', 'object'].includes(type))
-        keys = _jsObjectGetKeys(obj, type);
-    else
-        keys = _giGetKeys(obj, type);
- 
-    let infos = [];
-    for (let i = 0; i < keys.length; i++) {
-        // muffin has some props that throw an error because they shouldn't be introspected
-        try {
-            let [t, v] = getObjInfo(obj[keys[i]]);
-            infos.push({ name: keys[i].toString(),
-                         type: t,
-                         value: v,
-                         shortValue: '' });
-        } catch(e) {
+                // clockwise order
+                Cogl.rectangle(0, 0, geom.width, width);
+                Cogl.rectangle(geom.width - width, width,
+                               geom.width, geom.height);
+                Cogl.rectangle(0, geom.height,
+                               geom.width - width, geom.height - width);
+                Cogl.rectangle(0, geom.height - width,
+                               width, width);
+            });
+
+        actor.queue_redraw();
+        return signalId;
+    }
+
+    _updatePassthroughText() {
+        if (this.passThroughEvents)
+            this._passThroughText.text = '(Press Pause or Control to disable event pass through)';
+        else
+            this._passThroughText.text = '(Press Pause or Control to enable event pass through)';
+    }
+
+    _onCapturedEvent(actor, event) {
+        if (event.type() == Clutter.EventType.KEY_PRESS && (event.get_key_symbol() == Clutter.Control_L ||
+                                                            event.get_key_symbol() == Clutter.Control_R ||
+                                                            event.get_key_symbol() == Clutter.Pause)) {
+            this.passThroughEvents = !this.passThroughEvents;
+            this._updatePassthroughText();
+            return true;
+        }
+
+        if (this.passThroughEvents)
+            return false;
+
+        switch (event.type()) {
+            case Clutter.EventType.KEY_PRESS:
+                return this._onKeyPressEvent(actor, event);
+            case Clutter.EventType.BUTTON_PRESS:
+                return this._onButtonPressEvent(actor, event);
+            case Clutter.EventType.SCROLL:
+                return this._onScrollEvent(actor, event);
+            case Clutter.EventType.MOTION:
+                return this._onMotionEvent(actor, event);
+            default:
+                return true;
         }
     }
-    return infos;
+
+    _allocate(actor, box, flags) {
+        if (!this._eventHandler)
+            return;
+
+        let primary = Main.layoutManager.primaryMonitor;
+
+        let [minWidth, minHeight, natWidth, natHeight] =
+            this._eventHandler.get_preferred_size();
+
+        let childBox = new Clutter.ActorBox();
+        childBox.x1 = primary.x + Math.floor((primary.width - natWidth) / 2);
+        childBox.x2 = childBox.x1 + natWidth;
+        childBox.y1 = primary.y + Math.floor((primary.height - natHeight) / 2);
+        childBox.y2 = childBox.y1 + natHeight;
+        this._eventHandler.allocate(childBox, flags);
+    }
+
+    _close() {
+        global.stage.disconnect(this._capturedEventId);
+        Main.popModal(this._eventHandler);
+
+        this._eventHandler.destroy();
+        this._eventHandler = null;
+        this.emit('closed');
+    }
+
+    _onDestroy() {
+        if (this._borderPaintTarget != null)
+            this._borderPaintTarget.disconnect(this._borderPaintId);
+    }
+
+    _onKeyPressEvent(actor, event) {
+        if (event.get_key_symbol() == Clutter.Escape)
+            this._close();
+        return true;
+    }
+
+    _onButtonPressEvent(actor, event) {
+        if (this._target) {
+            let [stageX, stageY] = event.get_coords();
+            this.emit('target', this._target, stageX, stageY);
+        }
+        this._close();
+        return true;
+    }
+
+    _onScrollEvent(actor, event) {
+        switch (event.get_scroll_direction()) {
+            case Clutter.ScrollDirection.UP:
+                // select parent
+                let parent = this._target.get_parent();
+                if (parent != null) {
+                    this._target = parent;
+                    this._update(event);
+                }
+                break;
+
+            case Clutter.ScrollDirection.DOWN:
+                // select child
+                if (this._target != this._pointerTarget) {
+                    let child = this._pointerTarget;
+                    while (child) {
+                        let parent = child.get_parent();
+                        if (parent == this._target)
+                            break;
+                        child = parent;
+                    }
+                    if (child) {
+                        this._target = child;
+                        this._update(event);
+                    }
+                }
+                break;
+
+            default:
+                break;
+        }
+        return true;
+    }
+
+    _onMotionEvent(actor, event) {
+        this._update(event);
+        return true;
+    }
+
+    _update(event) {
+        let [stageX, stageY] = event.get_coords();
+        let target = global.stage.get_actor_at_pos(Clutter.PickMode.ALL,
+                                                   stageX,
+                                                   stageY);
+
+        if (target != this._pointerTarget)
+            this._target = target;
+        this._pointerTarget = target;
+
+        let position = '[inspect x: ' + stageX + ' y: ' + stageY + ']';
+        this._displayText.text = '';
+        this._displayText.text = position + ' ' + this._target;
+
+        if (this._borderPaintTarget != this._target) {
+            if (this._borderPaintTarget != null)
+                this._borderPaintTarget.disconnect(this._borderPaintId);
+            this._borderPaintTarget = this._target;
+            this._borderPaintId = this._addBorderPaintHook(this._target);
+        }
+    }
 }
+Signals.addSignalMethods(Inspector.prototype);
+
+
+/*************************************************
+ * object/value inspection utility functions     *
+ *************************************************/
 
 // get list of keys for js objects
 function _jsObjectGetKeys(obj, type) {
@@ -193,8 +459,6 @@ function _giGetKeys(obj, gTypeName) {
         case Gir.InfoType.FLAGS:
             return _giEnumInfoGetKeys(info);
         default:
-            // FIXME: remove log
-            log(`unhandled type ${type}`);
             return [];
     }
 }
@@ -215,9 +479,6 @@ function _giNamespaceGetKeys(obj) {
             case Gir.InfoType.OBJECT:
                 keys.push(name);
                 break;
-            default:
-                // FIXME: remove
-                log(`not accepting namespace property type ${info.get_type()}`);
         }
     }
     return keys;
@@ -301,589 +562,377 @@ function _giEnumInfoGetKeys(info) {
     return keys.concat(_giInfoGetMethods(info, 'enum'));
 }
 
-// always returns an object we can give back to melange.
-// it may be useful to inspect Error() objects
-function tryEval(js) {
+/*************************************************
+ * the actual looking glass implementation       *
+ *************************************************/
+
+let _initialized = false;
+let _it = null;
+let _settings = null;
+let _results = [];
+let _rawResults = [];
+let _windowList = null;
+let _history = null;
+let _dbusImpl = null;
+let _melangeProxy = null;
+
+//dbus method handler/map
+const _dbusHandlers = {
+    AddResult: addResult,
+    Eval: (command) => {
+        _history.addItem(command);
+        addResult(command);
+    },
+    FullGc: () => System.gc(),
+    GetErrorStack: () => [true, Main._errorLogStack],
+    GetExtensionList: getExtensionList,
+    GetResults: () => [true, _rawResults],
+    GetLatestWindowList:() => [true, getLatestWindowList()],
+    Inspect: (path) => [true, inspect(path)],
+    ReloadExtension: reloadExtension,
+    StartInspector: () => startInspector(toggle)
+};
+
+// must be called by main.js during start()
+function init() {
+    if (_initialized)
+        return;
+    _initialized = true;
+
+    _settings = new Gio.Settings({schema_id: "org.cinnamon.desktop.keybindings"});
+    _settings.connect("changed::looking-glass-keybinding", _update_keybinding);
+    _update_keybinding();
+
+    _dbusImpl = Gio.DBusExportedObject.wrapJSObject(LG_IFACE, _dbusHandlers);
+    _dbusImpl.export(Gio.DBus.session, '/org/Cinnamon/LookingGlass');
+    Gio.DBus.session.own_name('org.Cinnamon.LookingGlass', Gio.BusNameOwnerFlags.REPLACE, null, null);
+
+    let proxyWrapper = Gio.DBusProxy.makeProxyWrapper(MELANGE_IFACE);
+    _melangeProxy = new proxyWrapper(Gio.DBus.session, 'org.Cinnamon.Melange', '/org/Cinnamon/Melange');
+
+    _windowList = new WindowList(() => _dbusImpl.emit_signal('WindowListUpdate', null));
+    _history = new History.HistoryManager({ gsettingsKey: HISTORY_KEY });
+}
+
+// should only used by main.js from _log()
+function _emitLogUpdate() {
+    if (!_initialized)
+        return;
+    _dbusImpl.emit_signal('LogUpdate', null);
+}
+
+function _update_keybinding() {
+    let kb = _settings.get_strv("looking-glass-keybinding");
+    Main.keybindingManager.addHotKeyArray("looking-glass-toggle", kb, toggle);
+}
+
+
+/*************************************************
+ * "public" looking glass js methods             *
+ *************************************************/
+
+/**
+ * addResult:
+ * @command (string): JS code or display name
+ * @result (any): value that corresponds to command, or null if command is JS
+ * @tooltip (string): a tooltip for this result, or null
+ *
+ * Takes either javascript to evaluate, or a display string and a
+ * result value and adds to the results list. If tooltip is not
+ * provided then a generic evaluation time tooltip is used. When
+ * object is provided command is not evaluated and the generic
+ * tooltip always shows 0ms.
+ */
+function addResult(command, result=null, tooltip=null) {
+    let duration = 0;
+    if (!result) {
+        let start = GLib.get_monotonic_time();
+        result = tryEval(command);
+        duration = ((GLib.get_monotonic_time() - start) / 1000).toFixed(1);
+    }
+
+    let index = _results.length;
+    let [resultType, resultValue] = getObjInfo(result);
+
+    _results.push({"o": result, "index": index});
+    _rawResults.push({ command: command,
+                       type: resultType,
+                       object: resultValue,
+                       index: index.toString(),
+                       tooltip: tooltip || `Execution time: ${duration}ms` });
+
+    _dbusImpl.emit_signal('ResultUpdate', null);
+
+    _it = result;
+}
+
+/**
+ * getExtensionList:
+ *
+ * Get an array of objects representing enabled extensions, conforming to
+ * the GetExtensionList dbus method return signature.
+ *
+ * Returns (Array): an array of objects
+ */
+function getExtensionList() {
     try {
-        return eval(js);
+        let extensionList = Array(Extension.extensions.length);
+        for (let i = 0; i < extensionList.length; i++) {
+            let meta = Extension.extensions[i].meta;
+            // There can be cases where we create dummy extension metadata
+            // that's not really a proper extension. Don't bother with these.
+            if (meta.name) {
+                extensionList[i] = {
+                    status: Extension.getMetaStateString(meta.state),
+                    name: meta.name,
+                    description: meta.description,
+                    uuid: Extension.extensions[i].uuid,
+                    folder: meta.path,
+                    url: meta.url ? meta.url : '',
+                    type: Extension.extensions[i].name,
+                    error_message: meta.error ? meta.error : _("Loaded successfully"),
+                    error: meta.error ? "true" : "false" // Must use string due to dbus restrictions
+                };
+            }
+        }
+        return [true, extensionList];
     } catch (e) {
+        global.logError('Error getting the extension list', e);
+        return [false, []];
+    }
+}
+
+/**
+ * getLatestWindowList:
+ *
+ * Get the list of open windows.
+ *
+ * Returns (Array): a list of "interesting" MetaWindows
+ */
+function getLatestWindowList() {
+    return _windowList.latestWindowList;
+}
+
+/**
+ * getObjInfo:
+ * @obj (Any): any primitive or object
+ *
+ * Gets the type and value string representations of a primitive or object.
+ *
+ * Returns (Array): a 2-element array [type, value]
+ */
+function getObjInfo(obj) {
+    let type, value;
+
+    if (obj === null)
+        type = 'null';
+    else if (obj === undefined)
+        type = 'undefined';
+
+    if (type) {
+        value = `[${type}]`;
+    } else {
+        // try to detect detailed type by string representation
+        if (obj instanceof GObject.Object) {
+            // work around Clutter.Actor.prototype.toString override
+            value = GObject.Object.prototype.toString.call(obj);
+        } else {
+            // toString() throws when called on ByteArray(GBytes wrapper object in cjs)
+            try {
+                value = obj.toString();
+            } catch (e) {
+                value = '[error getting value]';
+            }
+        }
+
+        type = typeof(obj);
+        if (type === 'object') {
+            if (value.search(IMPORT_RE) != -1) {
+                type = 'importer';
+            } else if (obj instanceof GIRepositoryNamespace) {
+                type = 'GIRepositoryNamespace';
+            } else {
+                let matches = value.match(GI_RE);
+                if (matches) {
+                    if (matches[1] === 'prototype') {
+                        type = 'prototype';
+                    } else {
+                        // 'instance'
+                        type = GObject.type_name(obj.constructor.$gtype);
+                    }
+                } else if ('$gtype' in obj) {
+                    type = GObject.type_name(obj.$gtype);
+                } else if (Array.isArray(obj)) {
+                    type = 'array';
+                }
+            }
+        }
+
+        // make empty strings/arrays obvious
+        if (value === '')
+            value = '[empty]';
+    }
+
+    return [type, value];
+}
+
+/**
+ * getObjKeyInfos:
+ * @obj (Object): an object to inspect
+ *
+ * Gets an array of objects which represent properties on obj, conforming to
+ * the Inspect dbus method return signature.
+ *
+ * Returns (Array): an array of objects
+ */
+function getObjKeyInfos(obj) {
+    let [type, ] = getObjInfo(obj);
+    if (NON_INSPECTABLE_TYPES.includes(type))
+        return [];
+
+    let keys = [];
+    if (['array', 'object'].includes(type))
+        keys = _jsObjectGetKeys(obj, type);
+    else
+        keys = _giGetKeys(obj, type);
+ 
+    let infos = [];
+    for (let i = 0; i < keys.length; i++) {
+        // muffin has some props that throw an error because they shouldn't be introspected
+        try {
+            let [t, v] = getObjInfo(obj[keys[i]]);
+            infos.push({ name: keys[i].toString(),
+                         type: t,
+                         value: v,
+                         shortValue: '' });
+        } catch(e) {
+        }
+    }
+    return infos;
+}
+
+/**
+ * getResult:
+ * @idx (Number): the result index
+ *
+ * Get the nth looking glass result value.
+ *
+ * Returns (Any): a result or null
+ */
+function getResult(idx) {
+    if (idx > -1 && idx < _results.length)
+        return _results[idx].o;
+    return null;
+}
+
+/**
+ * getWindow:
+ * @idx (Number): an index
+ *
+ * Gets the nth window list entry.
+ *
+ * Returns (MetaWindow): a MetaWindow or null
+ */
+function getWindow(idx) {
+    return _windowList.getWindowById(idx);
+}
+
+/**
+ * getWindowApp:
+ * @idx (Number): a window list index
+ *
+ * Gets the associated app of the nth window list entry.
+ *
+ * Returns (CinnamonApp): an app or null
+ */
+function getWindowApp(idx) {
+    let metaWindow = _windowList.getWindowById(idx)
+    if (!metaWindow)
+        return null;
+
+    let tracker = Cinnamon.WindowTracker.get_default();
+    return tracker.get_window_app(metaWindow);
+}
+
+/**
+ * inspect:
+ * @path (String): a path or expression to an Object to inspect
+ *
+ * Evaluates path and returns the result's properties. This should only
+ * be used for paths that evaluate to an Object.
+ *
+ * Returns (Array): an array of arrays with 2 strings [[name, value], ...]
+ */
+function inspect(path) {
+    return getObjKeyInfos(tryEval(path));
+}
+
+/**
+ * reloadExtension:
+ * @uuid (String): the xlet's uuid
+ * @type (Extension.Type): the xlet's type
+ *
+ * Reloads an xlet
+ */
+function reloadExtension(uuid, type) {
+    Extension.reloadExtension(uuid, Extension.Type[type]);
+}
+
+/**
+ * startInspector:
+ * @doneCb (Function): a callback to invoke when done, or null
+ *
+ * Starts the actor inspection picker which allows the user
+ * to select an actor that is visible on the stage. If the user
+ * selects an actor, it will be placed at the end of the results
+ * list. If a doneCb function is provided that will be called on
+ * close, along with an emission of the InspectorDone dbus signal.
+ */
+function startInspector(doneCb=null) {
+    try {
+        let inspector = new Inspector();
+        inspector.connect('target', (i, target, stageX, stageY) => {
+            let name = `<inspect x:${stageX} y:${stageY}>`;
+            addResult(name, target, "Inspected actor");
+        });
+        inspector.connect('closed', () => {
+            if (typeof doneCb === 'function')
+                doneCb();
+            _dbusImpl.emit_signal('InspectorDone', null)
+        });
+    } catch (e) {
+        global.logError('Error starting inspector', e);
+    }
+}
+
+/**
+ * toggle:
+ *
+ * Toggles visibility of the Melange window via dbus
+ */
+function toggle() {
+    _melangeProxy.toggleRemote();
+}
+
+/**
+ * tryEval:
+ * @command (String): Javascript to evaluate
+ *
+ * Prepends the COMMAND_HEADER to and evaluates command. If the
+ * script throws an Error, an Error object is returned.
+ *
+ * If an Error is returned, the object will include an extra
+ * 'evalSource' property containing the full source code that
+ * was being evaluated.
+ *
+ * Returns (Any): the resulting value, or an Error.
+ */
+function tryEval(command) {
+    let evalSource = `${COMMAND_HEADER}\n\n${command}`;
+    try {
+        return eval(evalSource);
+    } catch (e) {
+        e.evalSource = evalSource;
         return e;
     }
-}
-
-function WindowList() {
-    this._init();
-}
-
-WindowList.prototype = {
-    _init : function () {
-        this.lastId = 0;
-        this.latestWindowList = [];
-
-        let tracker = Cinnamon.WindowTracker.get_default();
-        global.display.connect('window-created', Lang.bind(this, this._updateWindowList));
-        tracker.connect('tracked-windows-changed', Lang.bind(this, this._updateWindowList));
-    },
-
-    getWindowById: function(id) {
-        let windows = global.get_window_actors();
-        for (let i = 0; i < windows.length; i++) {
-            let metaWindow = windows[i].metaWindow;
-            if (metaWindow._lgId === id)
-                return metaWindow;
-        }
-        return null;
-    },
-
-    _updateWindowList: function() {
-        let windows = global.get_window_actors();
-        let tracker = Cinnamon.WindowTracker.get_default();
-
-        let oldWindowList = this.latestWindowList;
-        this.latestWindowList = [];
-        for (let i = 0; i < windows.length; i++) {
-            let metaWindow = windows[i].metaWindow;
-
-            // only track "interesting" windows
-            if (!Main.isInteresting(metaWindow))
-                continue;
-
-            // Avoid multiple connections
-            if (!metaWindow._lookingGlassManaged) {
-                metaWindow.connect('unmanaged', Lang.bind(this, this._updateWindowList));
-                metaWindow._lookingGlassManaged = true;
-
-                metaWindow._lgId = this.lastId;
-                this.lastId++;
-            }
-
-            let lgInfo = {
-                id: metaWindow._lgId.toString(),
-                title: metaWindow.title + '',
-                wmclass: metaWindow.get_wm_class() + '',
-                app: '' };
-
-            let app = tracker.get_window_app(metaWindow);
-            if (app != null && !app.is_window_backed()) {
-                lgInfo.app = app.get_id() + '';
-            } else {
-                lgInfo.app = '<untracked>';
-            }
-
-            this.latestWindowList.push(lgInfo);
-        }
-
-        // Make sure the list changed before notifying listeneres
-        let changed = oldWindowList.length != this.latestWindowList.length;
-        if (!changed) {
-            for (let i = 0; i < oldWindowList.length; i++) {
-                if (oldWindowList[i].id != this.latestWindowList[i].id) {
-                    changed = true;
-                    break;
-                }
-            }
-        }
-        if (changed)
-            Main.createLookingGlass().emitWindowListUpdate();
-    }
-};
-Signals.addSignalMethods(WindowList.prototype);
-
-function addBorderPaintHook(actor) {
-    let signalId = actor.connect_after('paint',
-        function () {
-            let color = new Cogl.Color();
-            color.init_from_4ub(0xff, 0, 0, 0xc4);
-            Cogl.set_source_color(color);
-
-            let geom = actor.get_allocation_geometry();
-            let width = 2;
-
-            // clockwise order
-            Cogl.rectangle(0, 0, geom.width, width);
-            Cogl.rectangle(geom.width - width, width,
-                           geom.width, geom.height);
-            Cogl.rectangle(0, geom.height,
-                           geom.width - width, geom.height - width);
-            Cogl.rectangle(0, geom.height - width,
-                           width, width);
-        });
-
-    actor.queue_redraw();
-    return signalId;
-}
-
-function Inspector() {
-    this._init();
-}
-
-Inspector.prototype = {
-    _init: function() {
-        let container = new Cinnamon.GenericContainer({ width: 0,
-                                                     height: 0 });
-        container.connect('allocate', Lang.bind(this, this._allocate));
-        Main.uiGroup.add_actor(container);
-
-        let eventHandler = new St.BoxLayout({ name: 'LookingGlassDialog',
-                                              vertical: true,
-                                              reactive: true });
-        this._eventHandler = eventHandler;
-        Main.pushModal(this._eventHandler);
-        container.add_actor(eventHandler);
-        this._displayText = new St.Label();
-        eventHandler.add(this._displayText, { expand: true });
-        this._passThroughText = new St.Label({style: 'text-align: center;'});
-        eventHandler.add(this._passThroughText, { expand: true });
-
-        this._borderPaintTarget = null;
-        this._borderPaintId = null;
-        eventHandler.connect('destroy', Lang.bind(this, this._onDestroy));
-        this._capturedEventId = global.stage.connect('captured-event', Lang.bind(this, this._onCapturedEvent));
-
-        // this._target is the actor currently shown by the inspector.
-        // this._pointerTarget is the actor directly under the pointer.
-        // Normally these are the same, but if you use the scroll wheel
-        // to drill down, they'll diverge until you either scroll back
-        // out, or move the pointer outside of _pointerTarget.
-        this._target = null;
-        this._pointerTarget = null;
-        this.passThroughEvents = false;
-        this._updatePassthroughText();
-    },
-
-    _updatePassthroughText: function() {
-        if (this.passThroughEvents)
-            this._passThroughText.text = '(Press Pause or Control to disable event pass through)';
-        else
-            this._passThroughText.text = '(Press Pause or Control to enable event pass through)';
-    },
-
-    _onCapturedEvent: function (actor, event) {
-        if (event.type() == Clutter.EventType.KEY_PRESS && (event.get_key_symbol() == Clutter.Control_L ||
-                                                            event.get_key_symbol() == Clutter.Control_R ||
-                                                            event.get_key_symbol() == Clutter.Pause)) {
-            this.passThroughEvents = !this.passThroughEvents;
-            this._updatePassthroughText();
-            return true;
-        }
-
-        if (this.passThroughEvents)
-            return false;
-
-        switch (event.type()) {
-            case Clutter.EventType.KEY_PRESS:
-                return this._onKeyPressEvent(actor, event);
-            case Clutter.EventType.BUTTON_PRESS:
-                return this._onButtonPressEvent(actor, event);
-            case Clutter.EventType.SCROLL:
-                return this._onScrollEvent(actor, event);
-            case Clutter.EventType.MOTION:
-                return this._onMotionEvent(actor, event);
-            default:
-                return true;
-        }
-    },
-
-    _allocate: function(actor, box, flags) {
-        if (!this._eventHandler)
-            return;
-
-        let primary = Main.layoutManager.primaryMonitor;
-
-        let [minWidth, minHeight, natWidth, natHeight] =
-            this._eventHandler.get_preferred_size();
-
-        let childBox = new Clutter.ActorBox();
-        childBox.x1 = primary.x + Math.floor((primary.width - natWidth) / 2);
-        childBox.x2 = childBox.x1 + natWidth;
-        childBox.y1 = primary.y + Math.floor((primary.height - natHeight) / 2);
-        childBox.y2 = childBox.y1 + natHeight;
-        this._eventHandler.allocate(childBox, flags);
-    },
-
-    _close: function() {
-        global.stage.disconnect(this._capturedEventId);
-        Main.popModal(this._eventHandler);
-
-        this._eventHandler.destroy();
-        this._eventHandler = null;
-        this.emit('closed');
-    },
-
-    _onDestroy: function() {
-        if (this._borderPaintTarget != null)
-            this._borderPaintTarget.disconnect(this._borderPaintId);
-    },
-
-    _onKeyPressEvent: function (actor, event) {
-        if (event.get_key_symbol() == Clutter.Escape)
-            this._close();
-        return true;
-    },
-
-    _onButtonPressEvent: function (actor, event) {
-        if (this._target) {
-            let [stageX, stageY] = event.get_coords();
-            this.emit('target', this._target, stageX, stageY);
-        }
-        this._close();
-        return true;
-    },
-
-    _onScrollEvent: function (actor, event) {
-        switch (event.get_scroll_direction()) {
-            case Clutter.ScrollDirection.UP:
-                // select parent
-                let parent = this._target.get_parent();
-                if (parent != null) {
-                    this._target = parent;
-                    this._update(event);
-                }
-                break;
-
-            case Clutter.ScrollDirection.DOWN:
-                // select child
-                if (this._target != this._pointerTarget) {
-                    let child = this._pointerTarget;
-                    while (child) {
-                        let parent = child.get_parent();
-                        if (parent == this._target)
-                            break;
-                        child = parent;
-                    }
-                    if (child) {
-                        this._target = child;
-                        this._update(event);
-                    }
-                }
-                break;
-
-            default:
-                break;
-        }
-        return true;
-    },
-
-    _onMotionEvent: function (actor, event) {
-        this._update(event);
-        return true;
-    },
-
-    _update: function(event) {
-        let [stageX, stageY] = event.get_coords();
-        let target = global.stage.get_actor_at_pos(Clutter.PickMode.ALL,
-                                                   stageX,
-                                                   stageY);
-
-        if (target != this._pointerTarget)
-            this._target = target;
-        this._pointerTarget = target;
-
-        let position = '[inspect x: ' + stageX + ' y: ' + stageY + ']';
-        this._displayText.text = '';
-        this._displayText.text = position + ' ' + this._target;
-
-        if (this._borderPaintTarget != this._target) {
-            if (this._borderPaintTarget != null)
-                this._borderPaintTarget.disconnect(this._borderPaintId);
-            this._borderPaintTarget = this._target;
-            this._borderPaintId = addBorderPaintHook(this._target);
-        }
-    }
-};
-
-Signals.addSignalMethods(Inspector.prototype);
-
-
-const dbusIFace =
-    '<node> \
-        <interface name="org.Cinnamon.Melange"> \
-            <method name="show" /> \
-            <method name="hide" /> \
-            <method name="getVisible"> \
-                <arg type="b" direction="out" name="visible"/> \
-            </method> \
-            <property name="_open" type="b" access="read" /> \
-        </interface> \
-     </node>';
-
-const lgIFace =
-    '<node> \
-        <interface name="org.Cinnamon.LookingGlass"> \
-            <method name="Eval"> \
-                <arg type="s" direction="in" name="code"/> \
-            </method> \
-            <method name="GetResults"> \
-                <arg type="b" direction="out" name="success"/> \
-                <arg type="aa{ss}" direction="out" name="array of dictionary containing keys: command, type, object, index"/> \
-            </method> \
-            <method name="AddResult"> \
-                <arg type="s" direction="in" name="code"/> \
-            </method> \
-            <method name="GetErrorStack"> \
-                <arg type="b" direction="out" name="success"/> \
-                <arg type="aa{ss}" direction="out" name="array of dictionary containing keys: timestamp, category, message"/> \
-            </method> \
-            <method name="GetMemoryInfo"> \
-                <arg type="b" direction="out" name="success"/> \
-                <arg type="i" direction="out" name="time since last garbage collect"/> \
-                <arg type="a{si}" direction="out" name="dictionary mapping name(string) to number of bytes used(int)"/> \
-            </method> \
-            <method name="FullGc"> \
-            </method> \
-            <method name="Inspect"> \
-                <arg type="s" direction="in" name="code"/> \
-                <arg type="b" direction="out" name="success"/> \
-                <arg type="aa{ss}" direction="out" name="array of dictionary containing keys: name, type, value, shortValue"/> \
-            </method> \
-            <method name="GetLatestWindowList"> \
-                <arg type="b" direction="out" name="success"/> \
-                <arg type="aa{ss}" direction="out" name="array of dictionary containing keys: id, title, wmclass, app"/> \
-            </method> \
-            <method name="StartInspector"> \
-            </method> \
-            <method name="GetExtensionList"> \
-                <arg type="b" direction="out" name="success"/> \
-                <arg type="aa{ss}" direction="out" name="array of dictionary containing keys: status, name, description, uuid, folder, url, type"/> \
-            </method> \
-            <method name="ReloadExtension"> \
-                <arg type="s" direction="in" name="uuid"/> \
-                <arg type="s" direction="in" name="type"/> \
-            </method> \
-            <signal name="LogUpdate"></signal> \
-            <signal name="WindowListUpdate"></signal> \
-            <signal name="ResultUpdate"></signal> \
-            <signal name="InspectorDone"></signal> \
-            <signal name="ExtensionListUpdate"></signal> \
-        </interface> \
-    </node>';
-
-const proxy = Gio.DBusProxy.makeProxyWrapper(dbusIFace);
-
-function Melange() {
-    this._init.apply(this, arguments);
-}
-
-Melange.prototype = {
-    _init: function() {
-        this.proxy = null;
-        this._it = null;
-        this._open = false;
-        this._settings = new Gio.Settings({schema_id: "org.cinnamon.desktop.keybindings"});
-        this._settings.connect("changed::looking-glass-keybinding", Lang.bind(this, this._update_keybinding));
-        this._update_keybinding();
-
-        this._results = [];
-        this.rawResults = [];
-
-        this._windowList = new WindowList();
-        this._history = new History.HistoryManager({ gsettingsKey: HISTORY_KEY });
-
-        this._dbusImpl = Gio.DBusExportedObject.wrapJSObject(lgIFace, this);
-        this._dbusImpl.export(Gio.DBus.session, '/org/Cinnamon/LookingGlass');
-
-        Gio.DBus.session.own_name('org.Cinnamon.LookingGlass', Gio.BusNameOwnerFlags.REPLACE, null, null);
-    },
-
-    _update_keybinding: function() {
-        let kb = this._settings.get_strv("looking-glass-keybinding");
-        Main.keybindingManager.addHotKeyArray("looking-glass-toggle", kb, Lang.bind(this, this._key_callback));
-    },
-
-    _key_callback: function() {
-        this.open();
-    },
-
-    ensureProxy: function() {
-        if (!this.proxy)
-            this.proxy = new proxy(Gio.DBus.session, 'org.Cinnamon.Melange', '/org/Cinnamon/Melange');
-    },
-
-    open: function() {
-        this.ensureProxy()
-        this.proxy.showRemote();
-        this.updateVisible();
-    },
-
-    close: function() {
-        this.ensureProxy()
-        this.proxy.hideRemote();
-        this.updateVisible();
-    },
-
-    updateVisible: function() {
-        this.proxy.getVisibleRemote(Lang.bind(this, function(visible) {
-            this._open = visible;
-        }));
-    },
-
-    _pushResult: function(command, obj, tooltip) {
-        let index = this._results.length;
-        let result = {"o": obj, "index": index};
-        let [type, value] = getObjInfo(obj);
-        this.rawResults.push({command: command, type: type, object: value, index: index.toString(), tooltip: tooltip});
-        this.emitResultUpdate();
-
-        this._results.push(result);
-        this._it = obj;
-    },
-
-    inspect: function(path) {
-        let fullCmd = commandHeader + path;
-        let result = tryEval(fullCmd);
-        return getObjKeyInfos(result);
-    },
-
-    getIt: function () {
-        return this._it;
-    },
-
-    getResult: function(idx) {
-        return this._results[idx].o;
-    },
-
-    getWindow: function(idx) {
-        return this._windowList.getWindowById(idx);
-    },
-
-    getWindowApp: function(idx) {
-        let metaWindow = this._windowList.getWindowById(idx)
-        if (metaWindow) {
-            let tracker = Cinnamon.WindowTracker.get_default();
-            return tracker.get_window_app(metaWindow);
-        }
-        return null;
-    },
-
-    // DBus function
-    Eval: function(command) {
-        this._history.addItem(command);
-
-        let fullCmd = commandHeader + command;
-        let ts = GLib.get_monotonic_time();
-
-        let resultObj = tryEval(fullCmd);
-
-        let ts2 = GLib.get_monotonic_time();
-        let tooltip = _("Execution time (ms): ") + (ts2 - ts) / 1000;
-
-        this._pushResult(command, resultObj, tooltip);
-    },
-
-    // DBus function
-    GetResults: function() {
-        return [true, this.rawResults];
-    },
-
-    // DBus function
-    AddResult: function(path) {
-        let fullCmd = commandHeader + path;
-        this._pushResult(path, tryEval(fullCmd), "");
-    },
-
-    // DBus function
-    GetErrorStack: function() {
-        return [true, Main._errorLogStack];
-    },
-
-    // DBus function
-    GetMemoryInfo: function() {
-        return null;
-    },
-
-    // DBus function
-    FullGc: function() {
-        System.gc();
-    },
-
-    // DBus function
-    Inspect: function(path) {
-        try {
-            let result = this.inspect(path);
-            return [true, result];
-        } catch (e) {
-            global.logError('Error inspecting path: ' + path, e);
-            return [false, []];
-        }
-    },
-
-    // DBus function
-    GetLatestWindowList: function() {
-        try {
-            return [true, this._windowList.latestWindowList];
-        } catch (e) {
-            global.logError('Error getting latest window list', e);
-            return [false, []];
-        }
-    },
-
-    // DBus function
-    StartInspector: function() {
-        try {
-            let inspector = new Inspector();
-            inspector.connect('target', Lang.bind(this, function(i, target, stageX, stageY) {
-                let name = '<inspect x:' + stageX + ' y:' + stageY + '>';
-                this._pushResult(name, target, "Inspected actor");
-            }));
-            inspector.connect('closed', Lang.bind(this, function() {
-                this.emitInspectorDone();
-            }));
-        } catch (e) {
-            global.logError('Error starting inspector', e);
-        }
-    },
-
-    // DBus function
-    GetExtensionList: function() {
-        try {
-            let extensionList = Array(Extension.extensions.length);
-            for (let i = 0; i < extensionList.length; i++) {
-                let meta = Extension.extensions[i].meta;
-                // There can be cases where we create dummy extension metadata
-                // that's not really a proper extension. Don't bother with these.
-                if (meta.name) {
-                    extensionList[i] = {
-                        status: Extension.getMetaStateString(meta.state),
-                        name: meta.name,
-                        description: meta.description,
-                        uuid: Extension.extensions[i].uuid,
-                        folder: meta.path,
-                        url: meta.url ? meta.url : '',
-                        type: Extension.extensions[i].name,
-                        error_message: meta.error ? meta.error : _("Loaded successfully"),
-                        error: meta.error ? "true" : "false" // Must use string due to dbus restrictions
-                    };
-                }
-            }
-            return [true, extensionList];
-        } catch (e) {
-            global.logError('Error getting the extension list', e);
-            return [false, []];
-        }
-    },
-
-    // DBus function
-    ReloadExtension: function(uuid, type) {
-        Extension.reloadExtension(uuid, Extension.Type[type]);
-    },
-
-    emitLogUpdate: function() {
-        this._dbusImpl.emit_signal('LogUpdate', null);
-    },
-
-    emitWindowListUpdate: function() {
-        this._dbusImpl.emit_signal('WindowListUpdate', null);
-    },
-
-    emitResultUpdate: function() {
-        this._dbusImpl.emit_signal('ResultUpdate', null);
-    },
-
-    emitInspectorDone: function() {
-        this._dbusImpl.emit_signal('InspectorDone', null);
-    },
-
-    emitExtensionListUpdate: function() {
-        this._dbusImpl.emit_signal('ExtensionListUpdate', null);
-    },
 }

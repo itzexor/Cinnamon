@@ -22,6 +22,7 @@ const Signals = imports.signals;
 const Applet = imports.ui.applet;
 const AppletManager = imports.ui.appletManager;
 const DND = imports.ui.dnd;
+const LookingGlass = imports.ui.lookingGlass;
 const Main = imports.ui.main;
 const ModalDialog = imports.ui.modalDialog;
 const PopupMenu = imports.ui.popupMenu;
@@ -1547,7 +1548,7 @@ function populateSettingsMenu(menu, panelId) {
     });
 
     menu.troubleshootItem.menu.addAction(_("Looking Glass"), function(event) {
-        Main.createLookingGlass().open();
+        LookingGlass.toggle();
     });
 
     menu.troubleshootItem.menu.addAction(_("Restore all settings to default"), function(event) {

@@ -6,7 +6,6 @@
  * @overview (Overview.Overview): The "scale" overview
  * @expo (Expo.Expo): The "expo" overview
  * @runDialog (RunDialog.RunDialog): The run dialog
- * @lookingGlass (LookingGlass.Melange): The looking glass object
  * @wm (WindowManager.WindowManager): The window manager
  * @messageTray (MessageTray.MessageTray): The mesesage tray
  * @indicatorManager (IndicatorManager.IndicatorManager): The indicator manager
@@ -134,7 +133,6 @@ var osdWindowManager = null;
 var overview = null;
 var expo = null;
 var runDialog = null;
-var lookingGlass = null;
 var wm = null;
 var a11yHandler = null;
 var messageTray = null;
@@ -272,7 +270,7 @@ function do_shutdown_sequence() {
 function _reparentActor(actor, newParent) {
     let parent = actor.get_parent();
     if (parent)
-      parent.remove_actor(actor);
+        parent.remove_actor(actor);
     if(newParent)
         newParent.add_actor(actor);
 }
@@ -435,6 +433,7 @@ function start() {
     keyboard.init();
     overview.init();
     expo.init();
+    LookingGlass.init();
 
     _addXletDirectoriesToSearchPath();
     _initUserSession();
@@ -476,8 +475,6 @@ function start() {
         DeskletManager.init(),
         SearchProviderManager.init()
     ]).then(function() {
-        createLookingGlass();
-
         a11yHandler = new Accessibility.A11yHandler();
 
         if (software_rendering && !GLib.getenv('CINNAMON_2D')) {
@@ -1039,10 +1036,7 @@ function _log(category = 'info', msg = '') {
     };
 
     _errorLogStack.push(out);
-
-    if (lookingGlass) {
-        lookingGlass.emitLogUpdate();
-    }
+    LookingGlass._emitLogUpdate();
 
     log(`[LookingGlass/${category}] ${text}`);
 }
@@ -1428,20 +1422,6 @@ function popModal(actor, timestamp) {
     layoutManager.updateChrome(true);
 
     Meta.enable_unredirect_for_screen(global.screen);
-}
-
-/**
- * createLookingGlass:
- *
- * Obtains the looking glass object. Create if it does not exist
- *
- * Returns (LookingGlass.Melange): looking glass object
- */
-function createLookingGlass() {
-    if (lookingGlass == null) {
-        lookingGlass = new LookingGlass.Melange();
-    }
-    return lookingGlass;
 }
 
 /**
