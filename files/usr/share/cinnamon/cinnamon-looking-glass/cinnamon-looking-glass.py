@@ -555,6 +555,6 @@ if __name__ == "__main__":
     if inspect:
         app.doInspect()
     elif not daemon:
-        app.show()
+        app.toggle()
 
     Gtk.main()

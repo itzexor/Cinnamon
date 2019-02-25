@@ -4,6 +4,11 @@ import pageutils
 import os
 from gi.repository import Gtk, Gdk
 
+INSTANCES_JS = {
+    'Applet': 'imports.ui.appletManager.definitions.filter(d => d.uuid === "{}")',
+    'Desklet': 'imports.ui.deskletManager.definitions.filter(d => d.uuid === "{}")'
+}
+
 class ModulePage(pageutils.BaseListView):
     def __init__(self, parent):
         store = Gtk.ListStore(str, str, str, str, str, str, str, bool, str)
@@ -21,6 +26,10 @@ class ModulePage(pageutils.BaseListView):
 
         self.popup = Gtk.Menu()
 
+        self.inspectInstances = Gtk.MenuItem('Inspect Instances')
+        self.inspectInstances.connect("activate", self.onInspectInstances)
+        self.popup.append(self.inspectInstances)
+
         self.viewSource = Gtk.MenuItem('View Source')
         self.viewSource.connect("activate", self.onViewSource)
         self.popup.append(self.viewSource)
@@ -36,6 +45,16 @@ class ModulePage(pageutils.BaseListView):
         self.popup.show_all()
 
         self.treeView.connect("button-press-event", self.on_button_press_event)
+
+    def onInspectInstances(self, *args):
+        treeIter = self.store.get_iter(self.selectedPath)
+        uuid = self.store.get_value(treeIter, 4)
+        xletType = self.store.get_value(treeIter, 1)
+        print(INSTANCES_JS[xletType], xletType)
+        melangeApp.pages["inspect"].updateInspector(INSTANCES_JS[xletType].format(uuid),
+                                                    "array",
+                                                    "xlet instances",
+                                                    "")
 
     def onViewSource(self, menuItem):
         treeIter = self.store.get_iter(self.selectedPath)
@@ -69,6 +88,9 @@ class ModulePage(pageutils.BaseListView):
             if pthinfo is not None:
                 uuid = self.store.get_value(treeIter, 4)
                 url = self.store.get_value(treeIter, 6)
+                xletType = self.store.get_value(treeIter, 1)
+
+                self.inspectInstances.set_sensitive(xletType == 'Applet' or xletType == 'Desklet')
 
                 self.viewWebPage.set_sensitive(url != "")
                 self.viewSource.set_label(uuid + " (View Source)")
