@@ -342,7 +342,7 @@ class MelangeApp(dbus.service.Object):
 
         dialog.set_title("About Melange")
         dialog.set_markup("""\
-<b>Melange</b> is a GTK3 alternative to the built-in javascript debugger <i>Looking Glass</i>
+<b>Melange</b> is the frontend for Cinnamon's built-in debugger <i>Looking Glass</i>
 
 Pressing <i>Escape</i> while Melange has focus will hide the window.
 If you want to exit Melange, use ALT+F4 or the <u>Actions</u> menu button.
