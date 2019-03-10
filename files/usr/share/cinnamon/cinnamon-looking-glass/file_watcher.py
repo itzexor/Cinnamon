@@ -101,35 +101,36 @@ class FileWatchHandler(pyinotify.ProcessEvent):
         self.view = view
 
     def process_IN_CLOSE_WRITE(self, event):
-        self.view.get_updates()
+        self.view.queue_update()
 
     def process_IN_CREATE(self, event):
-        self.view.get_updates()
+        self.view.queue_update()
 
     def process_IN_DELETE(self, event):
-        self.view.get_updates()
+        self.view.queue_update()
 
     def process_IN_MODIFY(self, event):
-        self.view.get_updates()
+        self.view.queue_update()
 
 class FileWatchView(Gtk.ScrolledWindow):
     def __init__(self, filename):
-        Gtk.ScrolledWindow.__init__(self)
+        Gtk.ScrolledWindow.__init__(self,
+                                    shadow_type=Gtk.ShadowType.ETCHED_IN,
+                                    vscrollbar_policy=Gtk.PolicyType.AUTOMATIC,
+                                    hscrollbar_policy=Gtk.PolicyType.AUTOMATIC)
 
         self.filename = filename
         self.changed = 0
         self.update_id = 0
-        self.set_shadow_type(Gtk.ShadowType.ETCHED_IN)
-        self.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
 
-        self.textview = Gtk.TextView()
-        self.textview.set_editable(False)
+        self.textview = Gtk.TextView(editable=False, left_margin=6)
         self.add(self.textview)
 
         self.textbuffer = self.textview.get_buffer()
+        self.scroll_mark = self.textbuffer.create_mark(None, self.textbuffer.get_end_iter(), False)
 
         self.show_all()
-        self.get_updates()
+        self.update()
 
         handler = FileWatchHandler(view=self)
         watch_manager = pyinotify.WatchManager()
@@ -140,20 +141,13 @@ class FileWatchView(Gtk.ScrolledWindow):
                                            pyinotify.IN_MODIFY))
         self.notifier.start()
         self.connect("destroy", self.on_destroy)
-        self.connect("size-allocate", self.on_size_changed)
 
     def on_destroy(self, widget):
         if self.notifier:
             self.notifier.stop()
             self.notifier = None
 
-    def on_size_changed(self, widget, bla):
-        if self.changed > 0:
-            end_iter = self.textbuffer.get_end_iter()
-            self.textview.scroll_to_iter(end_iter, 0, False, 0, 0)
-            self.changed -= 1
-
-    def get_updates(self):
+    def queue_update(self):
         # only update 2 times per second max
         # without this rate limiting, certain file modifications can cause
         # a crash at Gtk.TextBuffer.set_text()
@@ -161,7 +155,12 @@ class FileWatchView(Gtk.ScrolledWindow):
             self.update_id = GLib.timeout_add(500, self.update)
 
     def update(self):
-        self.changed = 2 # on_size_changed will be called twice, but only the second time is final
-        self.textbuffer.set_text(open(self.filename, 'r').read())
         self.update_id = 0
+        self.textbuffer.set_text(open(self.filename, 'r').read())
+
+        # have to wait for the textview to actually redraw otherwise we scroll nowhere
+        while Gtk.events_pending():
+            Gtk.main_iteration_do(False)
+
+        self.textview.scroll_to_mark(self.scroll_mark, 0, True, 0.5, 0.5)
         return False
