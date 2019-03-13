@@ -7,9 +7,14 @@ from gi.repository import GLib, Gtk
 
 class SelectWatchFileDialog(Gtk.Dialog):
     def __init__(self, parent):
-        Gtk.Dialog.__init__(self, "Add a new file watcher", parent, 0)
+        Gtk.Dialog.__init__(self,
+                            title="Add a new file watcher",
+                            transient_for=parent,
+                            border_width=6)
 
         self.set_default_size(150, 100)
+        self.add_buttons("_Cancel", Gtk.ResponseType.CANCEL,
+                         "_OK", Gtk.ResponseType.OK)
 
         label = Gtk.Label(label="")
         label.set_markup("<span size='large'>Add File Watch:</span>\n\n" +
@@ -38,8 +43,6 @@ class SelectWatchFileDialog(Gtk.Dialog):
         self.filename = None
         box.add(table)
 
-        self.add_buttons("_Cancel", Gtk.ResponseType.CANCEL,
-                         "_OK", Gtk.ResponseType.OK)
         self.show_all()
 
     def on_combo_changed(self, combo):
