@@ -207,10 +207,10 @@ __proto__: ModalDialog.ModalDialog.prototype,
         // If a process opens a new window and causes loss of focus (e.g. pkexec), we want
         // to make sure our async callback is cancelled, and close the run dialog.
         setTimeout(() => {
-            if (this.asyncCommandInProgress) {
-                this.subprocess.cancellable.cancel();
-                this.subprocess = null;
-            }
+            if (!this.asyncCommandInProgress)
+               return;
+            this.subprocess.cancellable.cancel();
+            this.subprocess = null;
             this.close();
         }, 0);
     },
