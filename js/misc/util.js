@@ -337,57 +337,64 @@ function fixupPCIDescription(desc) {
     return out.join(' ');
 }
 
-// key: normal char, value: regex containing all chars with accents
-const _LATINISE_REGEX = {
+// key: normal char, value: array containing all chars with accents
+const _LATINISE_MAP = {
     //uppercase
-    A: /[\xC0-\xC5\u0100\u0102\u0104]/g,
-    AE: /\xC6/g,
-    C: /[\xC7\u0106\u0108\u010A\u010C]/g,
-    D: /[\xD0\u010E\u0110]/g,
-    E: /[\xC8-\xCB\u0112\u0114\u0116\u0118\u011A]/g,
-    G: /[\u011C\u011E\u0120\u0122]/g,
-    H: /[\u0124\u0126]/g,
-    I: /[\xCC-\xCF\u0128\u012A\u012C\u0130]/g,
-    IJ: /\u0132/g,
-    J: /[\u012E\u0134]/g,
-    K: /\u0136/g,
-    L: /[\u0139\u013B\u013D\u0130F\u0141]/g,
-    N: /[\xD1\u0143\u0145\u0147\u014A]/g,
-    O: /[\xD2-\xD6\xD8\u014C\u014E\u0150]/g,
-    OE: /\u0152/g,
-    R: /[\u0154\u0156\u0158]/g,
-    S: /[\u015A\u015C\u015E\u0160]/g,
-    T: /[\u0162\u0164\u0166]/g,
-    U: /[\xD9-\xDC\u0168\u016A\u016C\u016E\u0170\u0172]/g,
-    W: /\u0174/g,
-    Y: /[\xDD\u0176\u0178]/g,
-    Z: /[\u0179\u017B\u017D]/g,
+    A:  ['\xC0', '\xC1', '\xC2', '\xC3', '\xC4', '\xC5', '\u0100', '\u0102', '\u0104'],
+    AE: ['\xC6'],
+    C:  ['\xC7', '\u0106', '\u0108', '\u010A', '\u010C'],
+    D:  ['\xD0', '\u010E', '\u0110'],
+    E:  ['\xC8', '\xC9', '\xCA', '\xCB', '\u0112', '\u0114', '\u0116', '\u0118', '\u011A'],
+    G:  ['\u011C', '\u011E', '\u0120', '\u0122'],
+    H:  ['\u0124', '\u0126'],
+    I:  ['\xCC', '\xCD', '\xCE', '\xCF', '\u0128', '\u012A', '\u012C', '\u0130'],
+    IJ: ['\u0132'],
+    J:  ['\u012E', '\u0134'],
+    K:  ['\u0136'],
+    L:  ['\u0139', '\u013B', '\u013D', '\u0130F', '\u0141'],
+    N:  ['\xD1', '\u0143', '\u0145', '\u0147', '\u014A'],
+    O:  ['\xD2', '\xD3', '\xD4', '\xD5', '\xD6', '\xD8', '\u014C', '\u014E', '\u0150'],
+    OE: ['\u0152'],
+    R:  ['\u0154', '\u0156', '\u0158'],
+    S:  ['\u015A', '\u015C', '\u015E', '\u0160'],
+    T:  ['\u0162', '\u0164', '\u0166'],
+    U:  ['\xD9', '\xDA', '\xDB', '\xDC', '\u0168', '\u016A', '\u016C', '\u016E', '\u0170', '\u0172'],
+    W:  ['\u0174'],
+    Y:  ['\xDD', '\u0176', '\u0178'],
+    Z:  ['\u0179', '\u017B', '\u017D'],
 
     //lowercase
-    a: /[\xE0-\xE5\u0101\u0103\u0105]/g,
-    ae: /\xE6/g,
-    c: /[\xE7\u0107\u0109\u010B\u010D]/g,
-    d: /[\u010F\u0111]/g,
-    e: /[\xE8-\xEB\u0113\u0115\u0117\u0119\u011B]/g,
-    g: /[\u011D\u011F\u0121\u0123]/g,
-    h: /[\u0125\u0127]/g,
-    i: /[\xEC-\xEF\u0129\u012B\u012D\u0131]/g,
-    ij: /\u0133/g,
-    j: /[\u012F\u0135]/g,
-    k: /[\u0137\u0138]/g,
-    l: /[\u013A\u013C\u013E\u0140\u0142]/g,
-    n: /[\xF1\u0144\u0146\u0148\u0149\u014B]/g,
-    o: /[\xF2-\xF6\xF8\u014D\u014F\u0151]/g,
-    oe: /\u0153/g,
-    r: /[\u0155\u0157\u0159]/g,
-    s: /[\u015B\u015D\u015F\u0161]/g,
-    t: /[\u0163\u0165\u0167]/g,
-    u: /[\xF9-\xFC\u0169\u016B\u016D\u016F\u0171\u0173]/g,
-    w: /\u0175/g,
-    y: /[\xFD\xFF\u0177]/g,
-    z: /[\u017A\u017C\u017E]/g
+    a:  ['\xE0', '\xE1', '\xE2', '\xE3', '\xE4', '\xE5', '\u0101', '\u0103', '\u0105'],
+    ae: ['\xE6'],
+    c:  ['\xE7', '\u0107', '\u0109', '\u010B', '\u010D'],
+    d:  ['\u010F', '\u0111'],
+    e:  ['\xE8', '\xE9', '\xEA', '\xEB', '\u0113', '\u0115', '\u0117', '\u0119', '\u011B'],
+    g:  ['\u011D', '\u011F', '\u0121', '\u0123'],
+    h:  ['\u0125', '\u0127'],
+    i:  ['\xEC', '\xED', '\xEE', '\xEF', '\u0129', '\u012B', '\u012D', '\u0131'],
+    ij: ['\u0133'],
+    j:  ['\u012F', '\u0135'],
+    k:  ['\u0137', '\u0138'],
+    l:  ['\u013A', '\u013C', '\u013E', '\u0140', '\u0142'],
+    n:  ['\xF1', '\u0144', '\u0146', '\u0148', '\u0149', '\u014B'],
+    o:  ['\xF2', '\xF3', '\xF4', '\xF5', '\xF6', '\xF8', '\u014D', '\u014F', '\u0151'],
+    oe: ['\u0153'],
+    r:  ['\u0155', '\u0157', '\u0159'],
+    s:  ['\u015B', '\u015D', '\u015F', '\u0161'],
+    t:  ['\u0163', '\u0165', '\u0167'],
+    u:  ['\xF9', '\xFA', '\xFB', '\xFC', '\u0169', '\u016B', '\u016D', '\u016F', '\u0171', '\u0173'],
+    w:  ['\u0175'],
+    y:  ['\xFD', '\xFF', '\u0177'],
+    z:  ['\u017A', '\u017C', '\u017E'],
+
 };
 
+const _LATINISE_LUT = {};
+// generate look up table for accent char -> latin char
+each(_LATINISE_MAP, (chars, latinChar) => each(chars, char => _LATINISE_LUT[char] = latinChar));
+
+// generate single capture group regex containting all accent chars
+const _LATINISE_REGEX = new RegExp(`(${Object.keys(_LATINISE_LUT).join('|')})`, 'g');
 
 /**
  * latinise:
@@ -396,11 +403,7 @@ const _LATINISE_REGEX = {
  * Returns (string): @string, replaced accented chars
  */
 function latinise(string){
-    //call every regex to replace chars
-    for(var i in _LATINISE_REGEX){
-        string = string.replace(_LATINISE_REGEX[i], i);
-    }
-    return string;
+    return string.replace(_LATINISE_REGEX, (char) => _LATINISE_LUT[char]);
 }
 
 /**
