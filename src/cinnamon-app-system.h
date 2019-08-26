@@ -53,4 +53,6 @@ GSList         *cinnamon_app_system_get_all                   (CinnamonAppSystem
 
 GSList         *cinnamon_app_system_get_running               (CinnamonAppSystem  *self);
 
+GSList *cinnamon_app_system_get_top_directories (CinnamonAppSystem  *self);
+
 #endif /* __CINNAMON_APP_SYSTEM_H__ */

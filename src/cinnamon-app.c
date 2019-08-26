@@ -57,6 +57,9 @@ struct _CinnamonApp
                           * want (e.g. it will be of TYPE_NORMAL from
                           * the way cinnamon-window-tracker.c works).
                           */
+
+  GPtrArray *categories;
+
   GDesktopAppInfo *info;
 
   CinnamonAppRunningState *running_state;
@@ -364,18 +367,7 @@ cinnamon_app_get_keywords (CinnamonApp *app)
 gboolean
 cinnamon_app_get_nodisplay (CinnamonApp *app)
 {
-  if (app->hidden_as_duplicate)
-    {
-      return TRUE;
-    }
-
-  if (app->entry)
-    {
-      return g_desktop_app_info_get_nodisplay (app->info);
-      // return !g_app_info_should_show (G_APP_INFO (app->info));
-    }
-
-  return FALSE;
+  return app->hidden_as_duplicate;
 }
 
 /**
@@ -739,6 +731,16 @@ cinnamon_app_get_windows (CinnamonApp *app)
   return app->running_state->windows;
 }
 
+/**
+ * cinnamon_app_get_categories:
+ *
+ * Returns: (nullable) (transfer none) (element-type utf8): List of categories or NULL if app is window-backed
+ */
+GPtrArray *
+cinnamon_app_get_categories (CinnamonApp *app) {
+  return app->categories;
+}
+
 guint
 cinnamon_app_get_n_windows (CinnamonApp *app)
 {
@@ -789,20 +791,20 @@ _cinnamon_app_new_for_window (MetaWindow      *window)
 }
 
 CinnamonApp *
-_cinnamon_app_new (GMenuTreeEntry *info)
+_cinnamon_app_new (GMenuTreeEntry *info, GPtrArray *categories)
 {
   CinnamonApp *app;
 
   app = g_object_new (CINNAMON_TYPE_APP, NULL);
 
   _cinnamon_app_set_entry (app, info);
-
+  _cinnamon_app_set_categories (app, categories);
   return app;
 }
 
 void
 _cinnamon_app_set_entry (CinnamonApp       *app,
-                      GMenuTreeEntry *entry)
+                         GMenuTreeEntry *entry)
 {
   g_clear_pointer (&app->entry, gmenu_tree_item_unref);
   g_clear_object (&app->info);
@@ -819,6 +821,14 @@ _cinnamon_app_set_entry (CinnamonApp       *app,
       app->info = g_object_ref (gmenu_tree_entry_get_app_info (entry));
     }
 }
+
+void
+_cinnamon_app_set_categories (CinnamonApp *app,
+                              GPtrArray   *categories)
+  {
+    g_clear_pointer (&app->categories, g_ptr_array_unref);
+    app->categories = g_ptr_array_ref (categories);
+  }
 
 static void
 cinnamon_app_state_transition (CinnamonApp      *app,
@@ -1193,9 +1203,13 @@ unref_running_state (CinnamonAppRunningState *state)
 static void
 cinnamon_app_init (CinnamonApp *self)
 {
-  self->state = CINNAMON_APP_STATE_STOPPED;
-  self->keywords = NULL;
+  self->categories = NULL;
+  self->entry = NULL;
   self->global = cinnamon_global_get ();
+  self->keywords = NULL;
+  self->state = CINNAMON_APP_STATE_STOPPED;
+  self->unique_name = NULL;
+  self->window_id_string = NULL;
 }
 
 static void
@@ -1203,17 +1217,9 @@ cinnamon_app_dispose (GObject *object)
 {
   CinnamonApp *app = CINNAMON_APP (object);
 
-  if (app->entry)
-    {
-      gmenu_tree_item_unref (app->entry);
-      app->entry = NULL;
-    }
-
-  if (app->info)
-    {
-      g_object_unref (app->info);
-      app->info = NULL;
-    }
+  g_clear_pointer(&app->entry, gmenu_tree_item_unref);
+  g_clear_pointer(&app->info, g_object_unref);
+  g_clear_pointer(&app->categories, g_ptr_array_unref);
 
   while (app->running_state)
     _cinnamon_app_remove_window (app, app->running_state->windows->data);

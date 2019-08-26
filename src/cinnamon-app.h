@@ -73,6 +73,8 @@ GSList *cinnamon_app_get_windows (CinnamonApp *app);
 
 GSList *cinnamon_app_get_pids (CinnamonApp *app);
 
+GPtrArray *cinnamon_app_get_categories (CinnamonApp *app);
+
 gboolean cinnamon_app_is_on_workspace (CinnamonApp *app, MetaWorkspace *workspace);
 
 gboolean cinnamon_app_launch (CinnamonApp     *app,
