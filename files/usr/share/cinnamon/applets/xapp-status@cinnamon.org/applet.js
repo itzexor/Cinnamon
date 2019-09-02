@@ -7,10 +7,18 @@ const Applet = imports.ui.applet;
 const Main = imports.ui.main;
 const SignalManager = imports.misc.signalManager;
 const Gtk = imports.gi.Gtk;
+const GObject = imports.gi.GObject;
 
-class XAppStatusIcon {
-
-    constructor(applet, busName, owner) {
+const XAppStatusIcon = GObject.registerClass(
+class XAppStatusIcon extends St.BoxLayout {
+    _init(applet, busName, owner) {
+        super._init({style_class: 'applet-box',
+                     reactive: true,
+                     track_hover: true,
+                     // The systray use a layout manager, we need to fill the space of the actor
+                     // or otherwise the menu will be displayed inside the panel.
+                     x_expand: true,
+                     y_expand: true });
 
         this.owner = owner;
         this.busName = busName;
@@ -19,32 +27,17 @@ class XAppStatusIcon {
         this.iconName = null;
         this.tooltipText = "";
 
-        this.actor = new St.BoxLayout({
-            style_class: 'applet-box',
-            reactive: true,
-            track_hover: true,
-            // The systray use a layout manager, we need to fill the space of the actor
-            // or otherwise the menu will be displayed inside the panel.
-            x_expand: true,
-            y_expand: true
-        });
-
         if (applet.orientation == St.Side.LEFT || applet.orientation == St.Side.RIGHT) {
-            this.actor.set_x_align(Clutter.ActorAlign.FILL);
-            this.actor.set_y_align(Clutter.ActorAlign.END);
-            this.actor.set_vertical(true);
+            this.set_x_align(Clutter.ActorAlign.FILL);
+            this.set_y_align(Clutter.ActorAlign.END);
+            this.set_vertical(true);
         }
 
         this.icon = new St.Icon();
         this.label = new St.Label({'y-align': St.Align.END });
 
-        this.actor.add_actor(this.icon);
-        this.actor.add_actor(this.label);
-
-        this.actor.connect('button-press-event', Lang.bind(this, this.onButtonPressEvent));
-        this.actor.connect('button-release-event', Lang.bind(this, this.onButtonReleaseEvent));
-        this.actor.connect('enter-event', Lang.bind(this, this.onEnterEvent));
-        this.actor.connect('leave-event', Lang.bind(this, this.onLeaveEvent));
+        this.add_actor(this.icon);
+        this.add_actor(this.label);
 
         Interfaces.getDBusProxyWithOwnerAsync("org.x.StatusIcon",
                                               this.busName,
@@ -69,6 +62,42 @@ class XAppStatusIcon {
                                                   this.on_dbus_acquired();
                                               }
                                           }));
+    }
+
+    vfunc_enter_event(event) {
+        this.applet.set_applet_tooltip(this.tooltipText);
+    }
+
+    vfunc_leave_event(event) {
+        this.applet.set_applet_tooltip("");
+    }
+
+    vfunc_button_press_event(event) {
+        this.applet.set_applet_tooltip("");
+        let [x, y] = this.get_transformed_position();
+        x = Math.round(x / global.ui_scale);
+        y = Math.round(y / global.ui_scale);
+        if (event.button == 1) {
+            this.proxy.LeftClickRemote(x, y, event.time, event.button);
+        }
+        else if (event.button == 2) {
+            this.proxy.MiddleClickRemote(x, y, event.time, event.button);
+        }
+        else if (event.button == 3) {
+            return true;
+        }
+        return false;
+    }
+
+    vfunc_button_release_event(event) {
+        let [x, y] = this.get_transformed_position();
+        x = Math.round(x / global.ui_scale);
+        y = Math.round(y / global.ui_scale);
+        if (event.button == 3) {
+            this.proxy.RightClickRemote(x, y, event.time, event.time);
+            return true;
+        }
+        return false;
     }
 
     on_dbus_acquired() {
@@ -143,54 +172,19 @@ class XAppStatusIcon {
 
     setVisible(visible) {
         if (visible) {
-            this.actor.show();
+            this.show();
         }
         else {
-            this.actor.hide();
+            this.hide();
         }
-    }
-
-    onEnterEvent(actor, event) {
-        this.applet.set_applet_tooltip(this.tooltipText);
-    }
-
-    onLeaveEvent(actor, event) {
-        this.applet.set_applet_tooltip("");
-    }
-
-    onButtonPressEvent(actor, event) {
-        this.applet.set_applet_tooltip("");
-        let [x, y] = actor.get_transformed_position();
-        x = Math.round(x / global.ui_scale);
-        y = Math.round(y / global.ui_scale);
-        if (event.get_button() == 1) {
-            this.proxy.LeftClickRemote(x, y, event.get_time(), event.get_button());
-        }
-        else if (event.get_button() == 2) {
-            this.proxy.MiddleClickRemote(x, y, event.get_time(), event.get_button());
-        }
-        else if (event.get_button() == 3) {
-            return true;
-        }
-        return false;
-    }
-
-    onButtonReleaseEvent(actor, event) {
-        let [x, y] = actor.get_transformed_position();
-        x = Math.round(x / global.ui_scale);
-        y = Math.round(y / global.ui_scale);
-        if (event.get_button() == 3) {
-            this.proxy.RightClickRemote(x, y, event.get_time(), event.get_button());
-            return true;
-        }
-        return false;
     }
 
     destroy() {
         if (this.property_proxy)
             this.property_proxy.disconnectSignal(this.propertyChangedId);
+        super.destroy();
     }
-}
+});
 
 class CinnamonXAppStatusApplet extends Applet.Applet {
     constructor(orientation, panel_height, instance_id) {
@@ -275,14 +269,14 @@ class CinnamonXAppStatusApplet extends Applet.Applet {
                 return;
         } else if (owner) {
             let statusIcon = new XAppStatusIcon(this, busName, owner);
-            this.manager_container.insert_child_at_index(statusIcon.actor, 0);
+            this.manager_container.insert_child_at_index(statusIcon, 0);
             this.statusIcons[owner] = statusIcon;
         }
     }
 
     removeStatusIcon(busName, owner) {
         if (this.statusIcons[owner] && this.statusIcons[owner].busName == busName) {
-            this.manager_container.remove_child(this.statusIcons[owner].actor);
+            this.manager_container.remove_child(this.statusIcons[owner]);
             this.statusIcons[owner].destroy();
             delete this.statusIcons[owner];
         }
