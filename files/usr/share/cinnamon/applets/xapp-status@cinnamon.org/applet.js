@@ -9,6 +9,9 @@ const SignalManager = imports.misc.signalManager;
 const Gtk = imports.gi.Gtk;
 const GObject = imports.gi.GObject;
 
+const STATUS_ICON_DBUS_NAME = "org.x.StatusIcon";
+const STATUS_ICON_DBUS_PREFIX = STATUS_ICON_DBUS_NAME + ".";
+
 const XAppStatusIcon = GObject.registerClass(
 class XAppStatusIcon extends St.BoxLayout {
     _init(applet, busName, owner) {
@@ -39,29 +42,22 @@ class XAppStatusIcon extends St.BoxLayout {
         this.add_actor(this.icon);
         this.add_actor(this.label);
 
-        Interfaces.getDBusProxyWithOwnerAsync("org.x.StatusIcon",
+        let proxyCb = (prop, proxy, error) => {
+            if (error) {
+                global.logError(error);
+                return;
+            }
+            this[prop] = proxy;
+            this.on_dbus_acquired();
+        };
+
+        Interfaces.getDBusProxyWithOwnerAsync(STATUS_ICON_DBUS_NAME,
                                               this.busName,
-                                              Lang.bind(this, function(proxy, error) {
-                                                  if (error) {
-                                                      global.logError(error);
-                                                  } else {
-                                                      this.proxy = proxy;
-                                                      this.on_dbus_acquired();
-                                                  }
-
-
-                                              }));
+                                              (...args) => proxyCb('proxy', ...args));
 
         Interfaces.getDBusPropertiesAsync(this.busName,
                                           "/org/x/StatusIcon",
-                                          Lang.bind(this, function(proxy, error) {
-                                              if (error) {
-                                                  global.logError(error);
-                                              } else {
-                                                  this.property_proxy = proxy;
-                                                  this.on_dbus_acquired();
-                                              }
-                                          }));
+                                          (...args) => proxyCb('property_proxy', ...args));
     }
 
     vfunc_enter_event(event) {
@@ -73,31 +69,31 @@ class XAppStatusIcon extends St.BoxLayout {
     }
 
     vfunc_button_press_event(event) {
+        let { x, y, time, button } = event;
         this.applet.set_applet_tooltip("");
-        let [x, y] = this.get_transformed_position();
-        x = Math.round(x / global.ui_scale);
-        y = Math.round(y / global.ui_scale);
-        if (event.button == 1) {
-            this.proxy.LeftClickRemote(x, y, event.time, event.button);
+        switch (button) {
+            case Clutter.BUTTON_PRIMARY:
+                this.proxy.LeftClickRemote(x, y, time, button);
+                break;
+            case Clutter.BUTTON_MIDDLE:
+                this.proxy.MiddleClickRemote(x, y, time, button);
+                break;
+            case Clutter.BUTTON_SECONDARY:
+                // secondary activates on release instead.
+                break;
+            default:
+                return Clutter.EVENT_PROPAGATE;
         }
-        else if (event.button == 2) {
-            this.proxy.MiddleClickRemote(x, y, event.time, event.button);
-        }
-        else if (event.button == 3) {
-            return true;
-        }
-        return false;
+        return Clutter.EVENT_STOP;
     }
 
     vfunc_button_release_event(event) {
-        let [x, y] = this.get_transformed_position();
-        x = Math.round(x / global.ui_scale);
-        y = Math.round(y / global.ui_scale);
-        if (event.button == 3) {
-            this.proxy.RightClickRemote(x, y, event.time, event.time);
-            return true;
+        let { x, y, time, button } = event;
+        if (button == Clutter.BUTTON_SECONDARY) {
+            this.proxy.RightClickRemote(x, y, time, button);
+            return Clutter.EVENT_STOP;
         }
-        return false;
+        return Clutter.EVENT_PROPAGATE;
     }
 
     on_dbus_acquired() {
@@ -111,21 +107,22 @@ class XAppStatusIcon extends St.BoxLayout {
         this.setLabel(this.proxy.Label);
         this.setVisible(this.proxy.Visible);
 
-        this.propertyChangedId = this.property_proxy.connectSignal('PropertiesChanged', Lang.bind(this, function(proxy, sender, [iface, properties]) {
-            if (properties.IconName)
-                this.setIconName(properties.IconName.unpack());
-            if (properties.TooltipText)
-                this.setTooltipText(properties.TooltipText.unpack());
-            if (properties.Label)
-                this.setLabel(properties.Label.unpack());
-            if (properties.Visible)
-                this.setVisible(properties.Visible.unpack());
-        }));
+        this.propertyChangedId = this.property_proxy.connectSignal('PropertiesChanged',
+            (proxy, sender, [iface, properties]) => {
+                if (properties.IconName)
+                    this.setIconName(properties.IconName.unpack());
+                if (properties.TooltipText)
+                    this.setTooltipText(properties.TooltipText.unpack());
+                if (properties.Label)
+                    this.setLabel(properties.Label.unpack());
+                if (properties.Visible)
+                    this.setVisible(properties.Visible.unpack());
+            });
     }
 
     setIconName(iconName) {
         if (iconName) {
-            if (iconName.match(/-symbolic$/)) {
+            if (iconName.endsWith("-symbolic")) {
                 this.icon.set_icon_type(St.IconType.SYMBOLIC);
             }
             else {
@@ -144,20 +141,16 @@ class XAppStatusIcon extends St.BoxLayout {
 
     refreshIcon() {
         // Called when the icon theme, or the panel size change..
-        if (this.iconName) {
-            this.icon.set_icon_name(this.iconName);
-            this.icon.set_icon_size(this.applet.getPanelIconSize(this.icon.get_icon_type()));
-            this.icon.show();
-        }
+        if (!this.iconName)
+            return;
+
+        this.icon.set_icon_name(this.iconName);
+        this.icon.set_icon_size(this.applet.getPanelIconSize(this.icon.get_icon_type()));
+        this.icon.show();
     }
 
     setTooltipText(tooltipText) {
-        if (tooltipText) {
-            this.tooltipText = tooltipText;
-        }
-        else {
-            this.tooltipText = "";
-        }
+        this.tooltipText = tooltipText ? tooltipText : "";
     }
 
     setLabel(label) {
@@ -220,40 +213,33 @@ class CinnamonXAppStatusApplet extends Applet.Applet {
                          null,
                          null);
 
-        Interfaces.getDBusAsync(Lang.bind(this, function (proxy, error) {
+        Interfaces.getDBusAsync((proxy, error) => {
             this.dbus = proxy;
 
             // Find all the XApp Status Icons on DBus
-            let name_regex = /^org\.x\.StatusIcon\./;
-            this.dbus.ListNamesRemote(Lang.bind(this,
-                function(names) {
-                    for (let n in names[0]) {
-                        let name = names[0][n];
-                        if (name_regex.test(name)) {
-                            this.dbus.GetNameOwnerRemote(name, Lang.bind(this,
-                                function(owner) {
-                                    this.addStatusIcon(name, owner);
-                                }
-                            ));
-                        }
-                    }
+            this.dbus.ListNamesRemote((names) => {
+                for (let n in names[0]) {
+                    let name = names[0][n];
+                    if (!name.startsWith(STATUS_ICON_DBUS_PREFIX))
+                        continue;
+                    this.dbus.GetNameOwnerRemote(name, (owner) => { this.addStatusIcon(name, owner) });
                 }
-            ));
+            });
 
             // Listen on DBUS in case some of them go, or new ones appear
-            this.ownerChangedId = this.dbus.connectSignal('NameOwnerChanged', Lang.bind(this,
-                function(proxy, sender, [name, old_owner, new_owner]) {
-                    if (name_regex.test(name)) {
-                        if (new_owner && !old_owner)
-                            this.addStatusIcon(name, new_owner);
-                        else if (old_owner && !new_owner)
-                            this.removeStatusIcon(name, old_owner);
-                        else
-                            this.changeStatusIconOwner(name, old_owner, new_owner);
-                    }
-                }
-            ));
-        }));
+            this.ownerChangedId = this.dbus.connectSignal('NameOwnerChanged',
+                (proxy, sender, [name, old_owner, new_owner]) => {
+                    if (!name.startsWith(STATUS_ICON_DBUS_PREFIX))
+                        return;
+
+                    if (new_owner && !old_owner)
+                        this.addStatusIcon(name, new_owner);
+                    else if (old_owner && !new_owner)
+                        this.removeStatusIcon(name, old_owner);
+                    else
+                        this.changeStatusIconOwner(name, old_owner, new_owner);
+                });
+        });
 
         this.signalManager = new SignalManager.SignalManager(null);
         this.signalManager.connect(Gtk.IconTheme.get_default(), 'changed', this.on_icon_theme_changed, this);
@@ -313,7 +299,7 @@ class CinnamonXAppStatusApplet extends Applet.Applet {
         let reactive = !global.settings.get_boolean('panel-edit-mode');
         for (let owner in this.statusIcons) {
             let icon = this.statusIcons[owner];
-            icon.actor.reactive = reactive;
+            icon.reactive = reactive;
         }
     }
 }
