@@ -1,53 +1,68 @@
 const Cinnamon = imports.gi.Cinnamon;
-const Lang = imports.lang;
-const St = imports.gi.St;
-const Gio = imports.gi.Gio;
 const Clutter = imports.gi.Clutter;
-const Interfaces = imports.misc.interfaces;
-const Applet = imports.ui.applet;
-const Main = imports.ui.main;
-const SignalManager = imports.misc.signalManager;
 const Gtk = imports.gi.Gtk;
-const XApp = imports.gi.XApp
+const GObject = imports.gi.GObject;
+const St = imports.gi.St;
+const XApp = imports.gi.XApp;
 
-class XAppStatusIcon {
+const Applet = imports.ui.applet;
+const SignalManager = imports.misc.signalManager;
+const Util = imports.misc.util;
 
-    constructor(applet, proxy) {
-        this.name = proxy.get_name();
+function calcStatusIconMenuOrigin(statusIcon) {
+    let allocation = Cinnamon.util_get_transformed_allocation(statusIcon);
+    let x = Math.round(allocation.x1 / global.ui_scale);
+    let y = Math.round(allocation.y1 / global.ui_scale);
+    let position;
+    switch (statusIcon.applet.orientation) {
+        case St.Side.TOP:
+            y = Math.round(allocation.y2 / global.ui_scale);
+            position = Gtk.PositionType.TOP;
+            break;
+        case St.Side.LEFT:
+            x = Math.round(allocation.x2 / global.ui_scale);
+            position = Gtk.PositionType.LEFT;
+            break;
+        case St.Side.RIGHT:
+            position =  Gtk.PositionType.RIGHT;
+            break;
+        case St.Side.BOTTOM:
+        default:
+            position = Gtk.PositionType.BOTTOM;
+    }
+    return [x, y, position];
+}
+
+var XAppStatusIcon = GObject.registerClass(
+class XAppStatusIcon extends St.BoxLayout {
+    _init(applet, proxy, name) {
+        super._init({ name: name,
+                      style_class: 'applet-box',
+                      reactive: true,
+                      track_hover: true,
+                      // The systray use a layout manager, we need to fill the space of the actor
+                      // or otherwise the menu will be displayed inside the panel.
+                      x_expand: true,
+                      y_expand: true });
+
         this.applet = applet;
         this.proxy = proxy;
-
         this.iconName = null;
         this.tooltipText = "";
 
-        this.actor = new St.BoxLayout({
-            style_class: 'applet-box',
-            reactive: true,
-            track_hover: true,
-            // The systray use a layout manager, we need to fill the space of the actor
-            // or otherwise the menu will be displayed inside the panel.
-            x_expand: true,
-            y_expand: true
-        });
-
         if (applet.orientation == St.Side.LEFT || applet.orientation == St.Side.RIGHT) {
-            this.actor.set_x_align(Clutter.ActorAlign.FILL);
-            this.actor.set_y_align(Clutter.ActorAlign.END);
-            this.actor.set_vertical(true);
+            this.set_x_align(Clutter.ActorAlign.FILL);
+            this.set_y_align(Clutter.ActorAlign.END);
+            this.set_vertical(true);
         }
 
         this.icon = new St.Icon();
         this.label = new St.Label({'y-align': St.Align.END });
 
-        this.actor.add_actor(this.icon);
-        this.actor.add_actor(this.label);
+        this.add_actor(this.icon);
+        this.add_actor(this.label);
 
-        this.actor.connect('button-press-event', Lang.bind(this, this.onButtonPressEvent));
-        this.actor.connect('button-release-event', Lang.bind(this, this.onButtonReleaseEvent));
-        this.actor.connect('enter-event', Lang.bind(this, this.onEnterEvent));
-        this.actor.connect('leave-event', Lang.bind(this, this.onLeaveEvent));
-
-        this._proxy_prop_change_id = this.proxy.connect('g-properties-changed', Lang.bind(this, this.on_properties_changed))
+        this._proxy_prop_change_id = this.proxy.connect('g-properties-changed', (...args) => { this.on_properties_changed(...args) });
 
         this.setIconName(proxy.icon_name);
         this.setTooltipText(proxy.tooltip_text);
@@ -70,8 +85,6 @@ class XAppStatusIcon {
         if ('Visible' in prop_names) {
             this.setVisible(proxy.visible);
         }
-
-        return;
     }
 
     setIconName(iconName) {
@@ -95,11 +108,12 @@ class XAppStatusIcon {
 
     refreshIcon() {
         // Called when the icon theme, or the panel size change..
-        if (this.iconName) {
-            this.icon.set_icon_name(this.iconName);
-            this.icon.set_icon_size(this.applet.getPanelIconSize(this.icon.get_icon_type()));
-            this.icon.show();
-        }
+        if (!this.iconName)
+            return;
+
+        this.icon.set_icon_name(this.iconName);
+        this.icon.set_icon_size(this.applet.getPanelIconSize(this.icon.get_icon_type()));
+        this.icon.show();
     }
 
     setTooltipText(tooltipText) {
@@ -123,73 +137,39 @@ class XAppStatusIcon {
 
     setVisible(visible) {
         if (visible) {
-            this.actor.show();
+            this.show();
         }
         else {
-            this.actor.hide();
+            this.hide();
         }
     }
 
-    onEnterEvent(actor, event) {
+    vfunc_enter_event(event) {
         this.applet.set_applet_tooltip(this.tooltipText);
     }
 
-    onLeaveEvent(actor, event) {
+    vfunc_leave_event(event) {
         this.applet.set_applet_tooltip("");
     }
 
-    onButtonPressEvent(actor, event) {
+    vfunc_button_press_event(event) {
         this.applet.set_applet_tooltip("");
-        let allocation = Cinnamon.util_get_transformed_allocation(actor);
-        let x = Math.round(allocation.x1 / global.ui_scale);
-        let y = Math.round(allocation.y1 / global.ui_scale);
-        switch (this.applet.orientation) {
-            case St.Side.BOTTOM:
-                this.proxy.call_button_press_sync(x, y, event.get_button(), event.get_time(), Gtk.PositionType.BOTTOM, null);
-                break;
-            case St.Side.TOP:
-                y = (allocation.y2 / global.ui_scale);
-                this.proxy.call_button_press_sync(x, allocation.y2, event.get_button(), event.get_time(), Gtk.PositionType.TOP, null);
-                break;
-            case St.Side.LEFT:
-                x = (allocation.x2 / global.ui_scale);
-                this.proxy.call_button_press_sync(x, y, event.get_button(), event.get_time(), Gtk.PositionType.LEFT, null);
-                break;
-            case St.Side.RIGHT:
-                this.proxy.call_button_press_sync(x, y, event.get_button(), event.get_time(), Gtk.PositionType.RIGHT, null);
-                break;
-        }
+        let [x, y, position] = calcStatusIconMenuOrigin(this);
+        this.proxy.call_button_press_sync(x, y, event.button, event.time, position, null);
         return true;
     }
 
-    onButtonReleaseEvent(actor, event) {
-        let allocation = Cinnamon.util_get_transformed_allocation(actor);
-        let x = Math.round(allocation.x1 / global.ui_scale);
-        let y = Math.round(allocation.y1 / global.ui_scale);
-        switch (this.applet.orientation) {
-            case St.Side.BOTTOM:
-                this.proxy.call_button_release_sync(x, y, event.get_button(), event.get_time(), Gtk.PositionType.BOTTOM, null);
-                break;
-            case St.Side.TOP:
-                y = (allocation.y2 / global.ui_scale);
-                this.proxy.call_button_release_sync(x, allocation.y2, event.get_button(), event.get_time(), Gtk.PositionType.TOP, null);
-                break;
-            case St.Side.LEFT:
-                x = (allocation.x2 / global.ui_scale);
-                this.proxy.call_button_release_sync(x, y, event.get_button(), event.get_time(), Gtk.PositionType.LEFT, null);
-                break;
-            case St.Side.RIGHT:
-                this.proxy.call_button_release_sync(x, y, event.get_button(), event.get_time(), Gtk.PositionType.RIGHT, null);
-                break;
-        }
+    vfunc_button_release_event(event) {
+        let [x, y, position] = calcStatusIconMenuOrigin(this);
+        this.proxy.call_button_release_sync(x, y, event.button, event.time, position, null);
         return true;
     }
 
     destroy() {
         this.proxy.disconnect(this._proxy_prop_change_id);
-        this._proxy_prop_change_id = 0;
+        super.destroy();
     }
-}
+});
 
 class CinnamonXAppStatusApplet extends Applet.Applet {
     constructor(orientation, panel_height, instance_id) {
@@ -235,29 +215,25 @@ class CinnamonXAppStatusApplet extends Applet.Applet {
             return;
         }
 
-        let statusIcon = new XAppStatusIcon(this, icon_proxy);
+        let statusIcon = new XAppStatusIcon(this, icon_proxy, proxy_name);
 
-        this.manager_container.insert_child_at_index(statusIcon.actor, 0);
+        this.manager_container.insert_child_at_index(statusIcon, 0);
         this.statusIcons[proxy_name] = statusIcon;
     }
 
     removeStatusIcon(monitor, icon_proxy) {
         let proxy_name = icon_proxy.get_name();
 
-        if (!this.statusIcons[proxy_name]) {
+        if (!(proxy_name in this.statusIcons)) {
             return;
         }
 
-        this.manager_container.remove_child(this.statusIcons[proxy_name].actor);
         this.statusIcons[proxy_name].destroy();
         delete this.statusIcons[proxy_name];
     }
 
     refreshIcons() {
-        for (let owner in this.statusIcons) {
-            let icon = this.statusIcons[owner];
-            icon.refreshIcon();
-        }
+        Util.each(this.statusIcons, icon => { icon.refreshIcon() });
     }
 
     on_panel_icon_size_changed(size) {
@@ -271,20 +247,16 @@ class CinnamonXAppStatusApplet extends Applet.Applet {
     on_applet_removed_from_panel() {
         this.signalManager.disconnectAllSignals();
 
-        for (let key in this.statusIcons) {
-            this.statusIcons[key].destroy();
-            delete this.statusIcons[key];
-        };
+        this.manager_container.destroy();
 
-        this.monitor = null;
+        delete this.manager_container;
+        delete this.monitor;
+        delete this.statusIcons;
     }
 
     on_panel_edit_mode_changed() {
         let reactive = !global.settings.get_boolean('panel-edit-mode');
-        for (let owner in this.statusIcons) {
-            let icon = this.statusIcons[owner];
-            icon.actor.reactive = reactive;
-        }
+        Util.each(this.statusIcons, icon => { icon.reactive = reactive });
     }
 
     on_orientation_changed(newOrientation) {
