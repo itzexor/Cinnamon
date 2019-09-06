@@ -220,7 +220,7 @@ class CinnamonXAppStatusApplet extends Applet.Applet {
 
         this.signalManager = new SignalManager.SignalManager(null);
 
-        this.monitor = XApp.StatusIconMonitor.get()
+        this.monitor = new XApp.StatusIconMonitor();
         this.signalManager.connect(this.monitor, "icon-added", this.addStatusIcon, this);
         this.signalManager.connect(this.monitor, "icon-removed", this.removeStatusIcon, this);
 
