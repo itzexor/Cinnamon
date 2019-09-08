@@ -1,4 +1,5 @@
 const Signals = imports.signals;
+const Meta = imports.gi.Meta;
 
 
 function SystrayManager() {
@@ -8,11 +9,22 @@ function SystrayManager() {
 SystrayManager.prototype = {
     _init: function() {
         this._roles = [];
+        this._emitId = 0;
     },
     
+    queueEmitChanged: function() {
+        if (this._emitId)
+            return;
+
+        this._emitId = Meta.later_add(Meta.LaterType.BEFORE_REDRAW, () => {
+            this._emitId = 0;
+            this.emit("changed");
+        });
+    },
+
     registerRole: function(role, id) {
         this._roles.push({role: role, id: id});
-        this.emit("changed");
+        this.queueEmitChanged();
     },
     
     unregisterRole: function(role, id) {
@@ -21,7 +33,7 @@ SystrayManager.prototype = {
                 this._roles.splice(i, 1);
             }
         }
-        this.emit("changed");
+        this.queueEmitChanged();
     },
     
     unregisterId: function(id) {
@@ -30,7 +42,7 @@ SystrayManager.prototype = {
                 this._roles.splice(i, 1);
             }
         }
-        this.emit("changed");
+        this.queueEmitChanged();
     },
     
     getRoles: function(id) {
