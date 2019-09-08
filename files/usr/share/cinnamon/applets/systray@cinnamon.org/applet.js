@@ -9,6 +9,8 @@ const Mainloop = imports.mainloop;
 const SignalManager = imports.misc.signalManager;
 const {findIndex} = imports.misc.util;
 
+const {XAppStatusTray} = require('./XappStatus');
+
 const NO_RESIZE_ROLES = ['shutter', 'filezilla'];
 
 // Override the factory and create an AppletPopupMenu instead of a PopupMenu
@@ -46,21 +48,19 @@ class CinnamonSystrayApplet extends Applet.Applet {
         this.actor.set_important(true);  // ensure we get class details from the default theme if not present
 
         this._signalManager = new SignalManager.SignalManager(null);
-        let manager;
 
         this.orientation = orientation;
+        let vertical = orientation == St.Side.LEFT || orientation == St.Side.RIGHT;
+
         this.icon_size = this.getPanelIconSize(St.IconType.FULLCOLOR) * global.ui_scale;
 
-        if (this.orientation == St.Side.TOP || this.orientation == St.Side.BOTTOM) {
-            manager = new Clutter.BoxLayout( { spacing: 4,
-                                               orientation: Clutter.Orientation.HORIZONTAL });
-        } else {
-            manager = new Clutter.BoxLayout( { spacing: 4,
-                                               orientation: Clutter.Orientation.VERTICAL });
-        }
-        this.manager = manager;
-        this.manager_container = new Clutter.Actor( { layout_manager: manager } );
+        this.manager = new Clutter.BoxLayout( { spacing: 4, vertical: vertical });
+        this.manager_container = new Clutter.Actor( { layout_manager: this.manager } );
         this.actor.add_actor (this.manager_container);
+
+        this.xappStatusTray = new XAppStatusTray(this, vertical);
+        this.actor.add_actor(this.xappStatusTray)
+
         this.manager_container.show();
 
         this._shellIndicators = [];
@@ -68,6 +68,18 @@ class CinnamonSystrayApplet extends Applet.Applet {
         this.menuManager = new PopupMenu.PopupMenuManager(this);
         this._signalAdded = 0;
         this._signalRemoved = 0;
+
+        this._signalManager.connect(Main.statusIconDispatcher, 'status-icon-added', this._onTrayIconAdded, this);
+        this._signalManager.connect(Main.statusIconDispatcher, 'status-icon-removed', this._onTrayIconRemoved, this);
+        this._signalManager.connect(Main.statusIconDispatcher, 'before-redisplay', this._onBeforeRedisplay, this);
+        this._signalManager.connect(Main.systrayManager, "changed", Main.statusIconDispatcher.redisplay, Main.statusIconDispatcher);
+        this._addIndicatorSupport();
+
+        let mappedId = this.actor.connect('notify::mapped', () => {
+            this.actor.disconnect(mappedId);
+            Main.statusIconDispatcher.start(this.actor.get_parent().get_parent());
+            Main.statusIconDispatcher.redisplay();
+        });
     }
 
     _addIndicatorSupport() {
@@ -176,30 +188,10 @@ class CinnamonSystrayApplet extends Applet.Applet {
         }
     }
 
-    on_applet_reloaded() {
-        global.trayReloading = true;
-    }
-
     on_applet_removed_from_panel() {
         this._signalManager.disconnectAllSignals();
         this._removeIndicatorSupport();
-    }
-
-    on_applet_added_to_panel() {
-        if (!global.trayReloading) {
-            Main.statusIconDispatcher.start(this.actor.get_parent().get_parent());
-        }
-
-        this._signalManager.connect(Main.statusIconDispatcher, 'status-icon-added', this._onTrayIconAdded, this);
-        this._signalManager.connect(Main.statusIconDispatcher, 'status-icon-removed', this._onTrayIconRemoved, this);
-        this._signalManager.connect(Main.statusIconDispatcher, 'before-redisplay', this._onBeforeRedisplay, this);
-        this._signalManager.connect(Main.systrayManager, "changed", Main.statusIconDispatcher.redisplay, Main.statusIconDispatcher);
-        this._addIndicatorSupport();
-
-        if (global.trayReloading) {
-            global.trayReloading = false;
-            Main.statusIconDispatcher.redisplay();
-        }
+        this.xappStatusTray.destroy();
     }
 
     on_panel_icon_size_changed(size) {
