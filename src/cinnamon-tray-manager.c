@@ -208,7 +208,7 @@ cinnamon_tray_manager_style_changed (StWidget *theme_widget,
 
 static void
 cinnamon_tray_manager_theme_widget_destroy (StWidget *theme_widget,
-                                              gpointer  user_data)
+                                            gpointer  user_data)
 {
   CinnamonTrayManager *manager = user_data;
   manager->priv->theme_widget = NULL;
@@ -372,14 +372,16 @@ static void
 cinnamon_tray_manager_child_redisplay (gpointer socket_pointer, gpointer child_pointer, gpointer user_data)
 {
   CinnamonTrayManagerChild *child = child_pointer;
-
+  GtkSocket *socket = socket_pointer;
   g_return_if_fail(child != NULL);
 
   if (child->actor && CLUTTER_IS_ACTOR(child->actor)) {
     clutter_actor_destroy(child->actor);
   }
 
-  on_plug_added(socket_pointer, child->manager);
+  if (gtk_socket_get_plug_window (socket)) {
+    on_plug_added(socket, child->manager);
+  }
 }
 
 void cinnamon_tray_manager_redisplay (CinnamonTrayManager *manager)
