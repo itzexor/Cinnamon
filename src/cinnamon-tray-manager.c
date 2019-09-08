@@ -19,7 +19,7 @@ struct _CinnamonTrayManagerPrivate {
   NaTrayManager *na_manager;
   ClutterStage *stage;
   ClutterColor bg_color;
-
+  StWidget *theme_widget;
   GHashTable *icons;
 };
 
@@ -190,7 +190,7 @@ cinnamon_tray_manager_new (void)
 
 static void
 cinnamon_tray_manager_style_changed (StWidget *theme_widget,
-                                  gpointer  user_data)
+                                     gpointer  user_data)
 {
   CinnamonTrayManager *manager = user_data;
   StThemeNode *theme_node;
@@ -206,10 +206,48 @@ cinnamon_tray_manager_style_changed (StWidget *theme_widget,
                               &icon_colors->success);
 }
 
+static void
+cinnamon_tray_manager_theme_widget_destroy (StWidget *theme_widget,
+                                              gpointer  user_data)
+{
+  CinnamonTrayManager *manager = user_data;
+  manager->priv->theme_widget = NULL;
+}
+
+static void
+update_theme_widget (CinnamonTrayManager *manager,
+                     StWidget            *theme_widget)
+{
+  StWidget *current_widget = manager->priv->theme_widget;
+  if (theme_widget == current_widget)
+    return;
+
+  manager->priv->theme_widget = theme_widget;
+
+  if (current_widget)
+    {
+      g_signal_handlers_disconnect_by_func (current_widget,
+                                            G_CALLBACK (cinnamon_tray_manager_style_changed),
+                                            manager);
+      g_signal_handlers_disconnect_by_func (current_widget,
+                                            G_CALLBACK (cinnamon_tray_manager_theme_widget_destroy),
+                                            manager);
+    }
+
+  g_signal_connect_object (theme_widget, "style-changed",
+                           G_CALLBACK (cinnamon_tray_manager_style_changed),
+                           manager, 0);
+  g_signal_connect (theme_widget, "destroy",
+                    G_CALLBACK (cinnamon_tray_manager_theme_widget_destroy),
+                    manager);
+
+  cinnamon_tray_manager_style_changed (theme_widget, manager);
+}
+
 void
 cinnamon_tray_manager_manage_stage (CinnamonTrayManager *manager,
-                                 ClutterStage     *stage,
-                                 StWidget         *theme_widget)
+                                    ClutterStage        *stage,
+                                    StWidget            *theme_widget)
 {
   Window stage_xwindow;
   GdkWindow *stage_window;
@@ -217,46 +255,44 @@ cinnamon_tray_manager_manage_stage (CinnamonTrayManager *manager,
   GdkScreen *screen;
   gint scale;
 
-  g_return_if_fail (manager->priv->stage == NULL);
+  if (manager->priv->stage == NULL)
+    {
+      manager->priv->stage = g_object_ref (stage);
 
-  manager->priv->stage = g_object_ref (stage);
+      stage_xwindow = clutter_x11_get_stage_window (stage);
 
-  stage_xwindow = clutter_x11_get_stage_window (stage);
+      /* This is a pretty ugly way to get the GdkScreen for the stage; it
+      *  will normally go through the foreign_new() case with a
+      *  round-trip to the X server, it might be nicer to pass the screen
+      *  in in some way. (The Clutter/Muffin combo is currently incapable
+      *  of multi-screen operation, so alternatively we could just assume
+      *  that clutter_x11_get_default_screen() gives us the right
+      *  screen.) We assume, in any case, that we are using the default
+      *  GDK display.
+      */
+      display = gdk_display_get_default();
+      stage_window = gdk_x11_window_lookup_for_display (display, stage_xwindow);
+      if (stage_window)
+        g_object_ref (stage_window);
+      else
+        stage_window = gdk_x11_window_foreign_new_for_display (display, stage_xwindow);
 
-  /* This is a pretty ugly way to get the GdkScreen for the stage; it
-   *  will normally go through the foreign_new() case with a
-   *  round-trip to the X server, it might be nicer to pass the screen
-   *  in in some way. (The Clutter/Muffin combo is currently incapable
-   *  of multi-screen operation, so alternatively we could just assume
-   *  that clutter_x11_get_default_screen() gives us the right
-   *  screen.) We assume, in any case, that we are using the default
-   *  GDK display.
-   */
-  display = gdk_display_get_default();
-  stage_window = gdk_x11_window_lookup_for_display (display, stage_xwindow);
-  if (stage_window)
-    g_object_ref (stage_window);
-  else
-    stage_window = gdk_x11_window_foreign_new_for_display (display, stage_xwindow);
+      screen = gdk_window_get_screen (stage_window);
 
-  screen = gdk_window_get_screen (stage_window);
+      g_object_unref (stage_window);
 
-  g_object_unref (stage_window);
+      scale = 1;
 
-  scale = 1;
+      g_object_get (cinnamon_global_get (),
+                    "ui_scale", &scale,
+                    NULL);
 
-  g_object_get (cinnamon_global_get (),
-                "ui_scale", &scale,
-                NULL);
+      na_tray_manager_set_scale (manager->priv->na_manager, scale);
 
-  na_tray_manager_set_scale (manager->priv->na_manager, scale);
+      na_tray_manager_manage_screen (manager->priv->na_manager, screen);
+  }
 
-  na_tray_manager_manage_screen (manager->priv->na_manager, screen);
-
-  g_signal_connect_object (theme_widget, "style-changed",
-                    G_CALLBACK (cinnamon_tray_manager_style_changed),
-                    manager, 0);
-  cinnamon_tray_manager_style_changed (theme_widget, manager);
+  update_theme_widget (manager, theme_widget);
 }
 
 static void
