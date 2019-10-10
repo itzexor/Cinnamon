@@ -1,11 +1,8 @@
 const St = imports.gi.St;
-const Clutter = imports.gi.Clutter;
-const Lang = imports.lang;
 const Main = imports.ui.main;
 const Mainloop = imports.mainloop;
 const Tweener = imports.ui.tweener;
 const Gio = imports.gi.Gio;
-const Gdk = imports.gi.Gdk;
 const Meta = imports.gi.Meta;
 
 const LEVEL_ANIMATION_TIME = 0.1;
@@ -15,8 +12,7 @@ const HIDE_TIMEOUT = 1500;
 const OSD_SIZE = 110;
 
 function convertGdkIndex(monitorIndex) {
-    let screen = Gdk.Screen.get_default();
-    let rect = screen.get_monitor_geometry(monitorIndex);
+    let rect = global.screen.get_monitor_geometry(monitorIndex);
     let cx = rect.x + rect.width / 2;
     let cy = rect.y + rect.height / 2;
     for (let i = 0; i < Main.layoutManager.monitors.length; i++) {
@@ -29,12 +25,8 @@ function convertGdkIndex(monitorIndex) {
     return monitorIndex;
 };
 
-function LevelBar() {
-    this._init();
-}
-
-LevelBar.prototype = {
-    _init: function() {
+class LevelBar {
+    constructor() {
         this._level = 0;
 
         this.initial = true;
@@ -50,11 +42,11 @@ LevelBar.prototype = {
         this.max_bar_width = 0;
 
         this.actor.set_child(this._bar);
-    },
+    }
 
     get level() {
         return this._level;
-    },
+    }
 
     set level(value) {
         this._level = Math.max(0, Math.min(value, 100));
@@ -78,9 +70,9 @@ LevelBar.prototype = {
         if (newWidth != this._bar.width) {
             this._bar.width = newWidth;
         }
-    },
+    }
 
-    setLevelBarHeight: function(sizeMultiplier) {
+    setLevelBarHeight(sizeMultiplier) {
         let themeNode = this.actor.get_theme_node();
         let height = themeNode.get_height();
         let newHeight = Math.floor(height * sizeMultiplier);
@@ -88,22 +80,13 @@ LevelBar.prototype = {
     }
 };
 
-function OsdWindow(monitorIndex) {
-    this._init(monitorIndex);
-}
 
-OsdWindow.prototype = {
-    _init: function(monitorIndex) {
-        this._popupSize = 0;
-
-        this._osdSettings = new Gio.Settings({ schema_id: "org.cinnamon" });
-        this._osdSettings.connect("changed::show-media-keys-osd", Lang.bind(this, this._onOsdSettingsChanged));
-
+class OsdWindow {
+    constructor(monitorIndex) {
         this._monitorIndex = monitorIndex;
-
         this.actor = new St.BoxLayout({ style_class: 'osd-window',
-                                       vertical: true,
-                                       important: true });
+                                        vertical: true,
+                                        important: true });
 
         this._icon = new St.Icon();
         this.actor.add(this._icon, { expand: true });
@@ -112,19 +95,33 @@ OsdWindow.prototype = {
         this.actor.add(this._level.actor);
 
         this._hideTimeoutId = 0;
-        this._reset();
+        this._blockedUnredirect = false;
 
-        Main.layoutManager.connect('monitors-changed', Lang.bind(this, this._monitorsChanged));
-        this._onOsdSettingsChanged();
+        let osdSettings = new Gio.Settings({ schema_id: "org.cinnamon" });
+        let settingsId = osdSettings.connect("changed::show-media-keys-osd",
+                                             () => this._onOsdSettingsChanged(osdSettings.get_string("show-media-keys-osd")));
 
+        this.actor.connect('destroy', () => {
+            osdSettings.disconnect(settingsId);
+            if (this._hideTimeoutId) {
+                Mainloop.source_remove(this._hideTimeoutId);
+                this._hideTimeoutId = 0;
+            }
+            this._reset();
+            this.actor = null;
+        });
+
+        this._onOsdSettingsChanged(osdSettings.get_string("show-media-keys-osd"));
+
+        this.actor.show_on_set_parent = false;
         Main.uiGroup.add_child(this.actor);
-    },
+    }
 
-    setIcon: function(icon) {
+    setIcon(icon) {
         this._icon.gicon = icon;
-    },
+    }
 
-    setLevel: function(level) {
+    setLevel(level) {
         this._level.actor.visible = (level != undefined);
         if (level != undefined) {
             if (this.actor.visible)
@@ -135,133 +132,123 @@ OsdWindow.prototype = {
             else
                 this._level.level = level;
         }
-    },
+    }
 
-    show: function() {
-        if (this._osdBaseSize == undefined)
-            return;
-
+    show() {
         if (!this._icon.gicon)
             return;
 
-        if (!this.actor.visible) {
-            Meta.disable_unredirect_for_screen(global.screen);
-            this._level.setLevelBarHeight(this._sizeMultiplier);
-            this.actor.show();
-            this.actor.opacity = 0;
-            this.actor.raise_top();
-
-            Tweener.addTween(this.actor,
-                             { opacity: 255,
-                               time: FADE_TIME,
-                               transition: 'easeOutQuad' });
-        }
-
         if (this._hideTimeoutId)
             Mainloop.source_remove(this._hideTimeoutId);
-        this._hideTimeoutId = Mainloop.timeout_add(HIDE_TIMEOUT, Lang.bind(this, this._hide));
-    },
+        this._hideTimeoutId = Mainloop.timeout_add(HIDE_TIMEOUT, () => this._hide());
 
-    cancel: function() {
+        if (this.actor.visible)
+            return;
+
+        if (!this._blockedUnredirect) {
+            Meta.disable_unredirect_for_screen(global.screen);
+            this._blockedUnredirect = true;
+        }
+
+        this._level.setLevelBarHeight(this._sizeMultiplier);
+        this.actor.show();
+        this.actor.opacity = 0;
+        this.actor.raise_top();
+
+        Tweener.addTween(this.actor,
+                            { opacity: 255,
+                              time: FADE_TIME,
+                              transition: 'easeOutQuad' });
+    }
+
+    cancel() {
         if (!this._hideTimeoutId)
             return;
 
         Mainloop.source_remove(this._hideTimeoutId);
         this._hide();
-    },
+    }
 
-    _hide: function() {
+    _hide() {
         this._hideTimeoutId = 0;
         Tweener.addTween(this.actor,
                          { opacity: 0,
                            time: FADE_TIME,
                            transition: 'easeOutQuad',
-                           onComplete: Lang.bind(this, function() {
+                           onComplete: () => {
+                               this.actor.hide();
+                               this.setLevel(null);
                                this._reset();
-                               Meta.enable_unredirect_for_screen(global.screen);
-                           })
-                         });
-    },
+                           }});
+    }
 
-    _reset: function() {
-        this.actor.hide();
-        this.setLevel(null);
-    },
-
-    _monitorsChanged: function() {
-        let monitor = Main.layoutManager.monitors[this._monitorIndex];
-        if (monitor) {
-            let scaleW = monitor.width / 640.0;
-            let scaleH = monitor.height / 480.0;
-            let scale = Math.min(scaleW, scaleH);
-            this._popupSize = this._osdBaseSize * Math.max(1, scale);
-
-            let scaleFactor = St.ThemeContext.get_for_stage(global.stage).scale_factor;
-            this._icon.icon_size = this._popupSize / (2 * scaleFactor);
-            this.actor.set_size(this._popupSize, this._popupSize);
-            this.actor.translation_y = (monitor.height + monitor.y) - (this._popupSize + (50 * scaleFactor));
-            this.actor.translation_x = ((monitor.width / 2) + monitor.x) - (this._popupSize / 2);
+    _reset() {
+        if (this._blockedUnredirect) {
+            Meta.enable_unredirect_for_screen(global.screen);
+            this._blockedUnredirect = false;
         }
-    },
+    }
 
-    _onOsdSettingsChanged: function() {
-        let currentSize = this._osdSettings.get_string("show-media-keys-osd");
-
+    _onOsdSettingsChanged(currentSize) {
+        let osdBaseSize;
         switch (currentSize) {
             case "disabled":
-                this._osdBaseSize = null;
+                osdBaseSize = null;
                 break;
             case "small":
                 this._sizeMultiplier = 0.7;
-                this._osdBaseSize = Math.floor(OSD_SIZE * this._sizeMultiplier);
+                osdBaseSize = Math.floor(OSD_SIZE * this._sizeMultiplier);
                 break;
             case "large":
                 this._sizeMultiplier = 1.0;
-                this._osdBaseSize = OSD_SIZE;
+                osdBaseSize = OSD_SIZE;
                 break;
             default:
                 this._sizeMultiplier = 0.85;
-                this._osdBaseSize = Math.floor(OSD_SIZE * this._sizeMultiplier);
+                osdBaseSize = Math.floor(OSD_SIZE * this._sizeMultiplier);
         }
 
-        this._monitorsChanged();
+        let monitor = Main.layoutManager.monitors[this._monitorIndex];
+        if (!monitor)
+            return;
+
+        let scaleW = monitor.width / 640.0;
+        let scaleH = monitor.height / 480.0;
+        let scale = Math.min(scaleW, scaleH);
+        let popupSize = osdBaseSize * Math.max(1, scale);
+
+        let scaleFactor = global.ui_scale;
+        this._icon.icon_size = popupSize / (2 * scaleFactor);
+        this.actor.set_size(popupSize, popupSize);
+        this.actor.translation_y = (monitor.height + monitor.y) - (popupSize + (50 * scaleFactor));
+        this.actor.translation_x = ((monitor.width / 2) + monitor.x) - (popupSize / 2);
     }
 };
 
-function OsdWindowManager() {
-    this._init();
-}
-
-OsdWindowManager.prototype = {
-    _init: function() {
+var OsdWindowManager = class {
+    constructor() {
         this._osdWindows = [];
 
-        Main.layoutManager.connect('monitors-changed',
-                                   Lang.bind(this, this._monitorsChanged));
+        Main.layoutManager.connect('monitors-changed', () => this._monitorsChanged());
         this._monitorsChanged();
-    },
+    }
 
-    _monitorsChanged: function() {
+    _monitorsChanged() {
+        this._osdWindows.forEach((w) => w.actor.destroy());
+        this._osdWindows = [];
+
         for (let i = 0; i < Main.layoutManager.monitors.length; i++) {
-            if (this._osdWindows[i] == undefined)
-                this._osdWindows[i] = new OsdWindow(i);
+            this._osdWindows.push(new OsdWindow(i));
         }
+    }
 
-        for (let i = Main.layoutManager.monitors.length; i < this._osdWindows.length; i++) {
-            this._osdWindows[i].actor.destroy();
-            this._osdWindows[i] = null;
-        }
-
-        this._osdWindows.length = Main.layoutManager.monitors.length;
-    },
-
-    _showOsdWindow: function(monitorIndex, icon, level) {
+    _showOsdWindow(monitorIndex, icon, level) {
         this._osdWindows[monitorIndex].setIcon(icon);
         this._osdWindows[monitorIndex].setLevel(level);
         this._osdWindows[monitorIndex].show();
-    },
+    }
 
-    show: function(monitorIndex, icon, level, convertIndex) {
+    show(monitorIndex, icon, level, convertIndex) {
         if (monitorIndex != -1) {
             if (convertIndex)
                 monitorIndex = convertGdkIndex(monitorIndex);
@@ -275,9 +262,9 @@ OsdWindowManager.prototype = {
             for (let i = 0; i < this._osdWindows.length; i++)
                 this._showOsdWindow(i, icon, level);
         }
-    },
+    }
 
-    hideAll: function() {
+    hideAll() {
         for (let i = 0; i < this._osdWindows.length; i++)
             this._osdWindows[i].cancel();
     }
