@@ -14,7 +14,6 @@ const Gio = imports.gi.Gio;
 const GnomeSession = imports.misc.gnomeSession;
 const ScreenSaver = imports.misc.screenSaver;
 const FileUtils = imports.misc.fileUtils;
-const Util = imports.misc.util;
 const DND = imports.ui.dnd;
 const Meta = imports.gi.Meta;
 const DocInfo = imports.misc.docInfo;
@@ -24,6 +23,12 @@ const Pango = imports.gi.Pango;
 const SearchProviderManager = imports.ui.searchProviderManager;
 const SignalManager = imports.misc.signalManager;
 const Params = imports.misc.params;
+
+const { each,
+        escapeRegExp,
+        latinise,
+        spawn,
+        spawnCommandLine } = imports.misc.util;
 
 const INITIAL_BUTTON_LOAD = 30;
 const NUM_SYSTEM_BUTTONS = 3;
@@ -110,6 +115,17 @@ class VisibleChildIterator {
 /**
  * SimpleMenuItem type strings in use:
  * -------------------------------------------------
+ * app              ApplicationButton
+ * category         CategoryButton
+ * fav              FavoritesButton
+ * no-recent        "No recent documents" button
+ * none             Default type
+ * place            PlaceButton
+ * recent           RecentsButton
+ * recent-clear     "Clear recent documents" button
+ * search-provider  SearchProviderResultButton
+ * system           SystemButton
+ * transient        TransientButton
  */
 
 /**
@@ -354,10 +370,10 @@ class ApplicationContextMenuItem extends PopupMenu.PopupBaseMenuItem {
                 AppFavorites.getAppFavorites().removeFavorite(this._appButton.app.get_id());
                 break;
             case "uninstall":
-                Util.spawnCommandLine("/usr/bin/cinnamon-remove-application '" + this._appButton.app.get_app_info().get_filename() + "'");
+                spawnCommandLine("/usr/bin/cinnamon-remove-application '" + this._appButton.app.get_app_info().get_filename() + "'");
                 break;
             case "run_with_nvidia_gpu":
-                Util.spawnCommandLine("optirun gtk-launch " + this._appButton.app.get_id());
+                spawnCommandLine("optirun gtk-launch " + this._appButton.app.get_id());
                 break;
             default:
                 return true;
@@ -379,8 +395,7 @@ class GenericApplicationButton extends SimpleMenuItem {
                         styleClass: styleClass,
                         app: app,
                         appId: app.get_id().slice(0, -8),
-                        keywords: app.get_keywords() || "",
-                        type: type });
+                        keywords: app.get_keywords() || "" });
     }
 
     highlight() {
@@ -486,7 +501,7 @@ class TransientButton extends SimpleMenuItem {
         } else {
             // Try anyway, even though we probably shouldn't.
             try {
-                Util.spawn(['gvfs-open', this.file.get_uri()]);
+                spawn(['gvfs-open', this.file.get_uri()]);
             } catch (e) {
                 global.logError("No handler available to open " + this.file.get_uri());
             }
@@ -722,7 +737,7 @@ class RecentButton extends SimpleMenuItem {
                                                  false,
                                                  [],
                                                  () => {
-                                                     Util.spawnCommandLine("nemo-open-with " + this.uri);
+                                                     spawnCommandLine("nemo-open-with " + this.uri);
                                                      this.applet.toggleContextMenu(this);
                                                      this.applet.menu.close();
                                                  });
@@ -1025,7 +1040,7 @@ class CinnamonMenuApplet extends Applet.TextIconApplet {
             icon_name: 'edit-clear',
             icon_type: St.IconType.SYMBOLIC });
 
-        this._appSortArray = []; // holds applicationsbox children in the original sort order
+        this._appSortArray = null; // holds applicationsbox children in the original sort order
         this._searchIconClickedId = 0;
         this._applicationsButtons = [];
         this._favoritesButtons = [];
@@ -1075,7 +1090,7 @@ class CinnamonMenuApplet extends Applet.TextIconApplet {
     }
 
     _updateShowIcons(container, show) {
-        Util.each(container.get_children(), c => {
+        each(container.get_children(), c => {
             let b = c._delegate;
             if (!(b instanceof SimpleMenuItem))
                 return;
@@ -1200,7 +1215,7 @@ class CinnamonMenuApplet extends Applet.TextIconApplet {
 
     // settings button callback
     _launch_editor() {
-        Util.spawnCommandLine("cinnamon-menu-editor");
+        spawnCommandLine("cinnamon-menu-editor");
     }
 
     on_applet_clicked(event) {
@@ -2159,7 +2174,7 @@ class CinnamonMenuApplet extends Applet.TextIconApplet {
         let recents = this.RecentManager._infosByTimestamp.filter(info => !info.name.startsWith("."));
         if (recents.length > 0) {
             this.noRecentDocuments = false;
-            Util.each(recents, (info) => {
+            each(recents, (info) => {
                 let button = new RecentButton(this, info);
                 this._recentButtons.push(button);
                 this.applicationsBox.add_actor(button.actor);
@@ -2225,7 +2240,7 @@ class CinnamonMenuApplet extends Applet.TextIconApplet {
         let [apps, dirs] = AppUtils.getApps();
 
         // generate all category buttons from top-level directories
-        Util.each(dirs, (d) => {
+        each(dirs, (d) => {
             let categoryButton = new CategoryButton(this, d.get_menu_id(), d.get_name(), d.get_icon());
             this._categoryButtons.push(categoryButton);
             this.categoriesBox.add_actor(categoryButton.actor);
@@ -2292,10 +2307,10 @@ class CinnamonMenuApplet extends Applet.TextIconApplet {
             let screensaver_dialog = Gio.file_new_for_path("/usr/bin/cinnamon-screensaver-command");
             if (screensaver_dialog.query_exists(null)) {
                 if (screensaver_settings.get_boolean("ask-for-away-message")) {
-                    Util.spawnCommandLine("cinnamon-screensaver-lock-dialog");
+                    spawnCommandLine("cinnamon-screensaver-lock-dialog");
                 }
                 else {
-                    Util.spawnCommandLine("cinnamon-screensaver-command --lock");
+                    spawnCommandLine("cinnamon-screensaver-command --lock");
                 }
             }
             else {
@@ -2558,7 +2573,7 @@ class CinnamonMenuApplet extends Applet.TextIconApplet {
 
     _resizeApplicationsBox() {
         let width = -1;
-        Util.each(this.applicationsBox.get_children(), c => {
+        each(this.applicationsBox.get_children(), c => {
             let [min, nat] = c.get_preferred_width(-1.0);
             if (nat > width)
                 width = nat;
@@ -2566,7 +2581,6 @@ class CinnamonMenuApplet extends Applet.TextIconApplet {
         this.applicationsBox.set_width(width + 42); // The answer to life...
     }
 
-    /**
     /**
      * Reset the ApplicationsBox to a specific category or list of buttons.
      * @param {String} category     (optional) The button type or application category to be displayed.
@@ -2576,7 +2590,7 @@ class CinnamonMenuApplet extends Applet.TextIconApplet {
     _displayButtons(category, buttons=[], autoCompletes=[]){
         /* We only operate on SimpleMenuItems here. If any other menu item types
          * are added, they should be managed independently. */
-        Util.each(this.applicationsBox.get_children(), c => {
+        each(this.applicationsBox.get_children(), c => {
             let b = c._delegate;
             if (!(b instanceof SimpleMenuItem))
                 return;
@@ -2599,7 +2613,7 @@ class CinnamonMenuApplet extends Applet.TextIconApplet {
         this._searchProviderButtons = [];
 
         if (autoCompletes) {
-            Util.each(autoCompletes, item => {
+            each(autoCompletes, item => {
                 let button = new TransientButton(this, item);
                 this._transientButtons.push(button);
                 this.applicationsBox.add_actor(button.actor);
@@ -2637,13 +2651,13 @@ class CinnamonMenuApplet extends Applet.TextIconApplet {
         this._appSortArray = this.applicationsBox.get_children();
     }
 
-    _restoreAppSort(resetSortCache=true) {
-        Util.each(this._appSortArray, (c, i) => {
+    _restoreAppSort(clearSaved=true) {
+        each(this._appSortArray, (c, i) => {
             if (!c.is_finalized())
                 this.applicationsBox.set_child_at_index(c, i);
         });
-        if (resetSortCache)
-            this._appSortArray = [];
+        if (clearSaved)
+            this._appSortArray = null;
     }
 
     resetSearch(){
@@ -2656,28 +2670,29 @@ class CinnamonMenuApplet extends Applet.TextIconApplet {
         if (!this.searchActive && !searchActive)
             return;
 
-        if (searchString == this._previousSearchPattern)
-            return;
-        this._previousSearchPattern = searchString;
-
         let searchWasActive = this.searchActive;
         this.searchActive = searchActive;
         this._fileFolderAccessActive = searchActive && this.searchFilesystem;
         this._clearAllSelections();
 
         if (searchActive) {
-            if (!searchWasActive)
-                this._saveAppSort();
-            else
-                this._restoreAppSort(false);
+            if (searchString == this._previousSearchPattern)
+                return;
+            this._previousSearchPattern = searchString;
 
-            this.searchEntry.set_secondary_icon(this._searchActiveIcon);
-            if (!this._searchIconClickedId) {
-                this._searchIconClickedId =
-                    this.searchEntry.connect('secondary-icon-clicked', () => {
-                        this.resetSearch();
-                        this._select_category();
-                    });
+            if (!searchWasActive) {
+                this.searchEntry.set_secondary_icon(this._searchActiveIcon);
+                if (!this._searchIconClickedId) {
+                    this._searchIconClickedId =
+                        this.searchEntry.connect('secondary-icon-clicked', () => {
+                            this.resetSearch();
+                            this._select_category();
+                        });
+                }
+
+                this._saveAppSort();
+            } else {
+                this._restoreAppSort(false);
             }
 
             this._setCategoriesButtonActive(false);
@@ -2707,7 +2722,7 @@ class CinnamonMenuApplet extends Applet.TextIconApplet {
         this._previousTreeSelectedActor = null;
         this._previousSelectedActor = null;
 
-        let rePattern = Util.escapeRegExp(Util.latinise(pattern.toLowerCase()));
+        let rePattern = escapeRegExp(latinise(pattern.toLowerCase()));
         // when we don't get a loose match. we could use normal string functions for half of these
         // but case-insensitive re is easier to do.
         let regExps = [
@@ -2721,33 +2736,33 @@ class CinnamonMenuApplet extends Applet.TextIconApplet {
 
         // gets button matches pre-sorted by type (app, place, recent), then alphabetically
         let results = [];
-        Util.each(this.applicationsBox.get_children(), c => {
+        each(this.applicationsBox.get_children(), c => {
             let button = c._delegate;
             if (!(button instanceof SimpleMenuItem) ||
                 !'app recent place'.includes(button.type))
                 return;
 
-            let match, score;
+            let score = -1;
             for (let i = 0; i <= nRegexs; i++) {
-                score = nRegexs - i;
                 if (regExps[i].test(button.name)) {
-                    match = button;
+                    score = nRegexs - i;
                 } else if (button.type === 'app') {
                     if (regExps[i].test(button.appId)) {
-                        match = button;
-                        score += nRegexs + 0.1;
-                    } else if (regExps[i].test(button.description) ||
-                               regExps[i].test(button.keywords)) {
-                        match = button;
-                        score += nRegexs + 0.2;
+                        score = nRegexs - i + 0.1;
+                    } else if (regExps[i].test(button.keywords)) {
+                        score = nRegexs - i + 0.2;
+                    } else if (regExps[i].test(button.description)) {
+                        score = nRegexs - i;
                     }
-                }
-                if (!match)
+                } else {
                     break;
+                }
             }
 
-            if (match)
+            if (score > -1) {
                 results.push([button, score]);
+                //log(`matched: "${pattern}" score: ${score} name: ${button.name}`);
+            }
         });
 
         /* Sort by score and convert to pure button list. Since we're
