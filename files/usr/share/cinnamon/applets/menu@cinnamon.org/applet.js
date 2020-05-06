@@ -395,7 +395,7 @@ class GenericApplicationButton extends SimpleMenuItem {
                         styleClass: styleClass,
                         app: app,
                         appId: app.get_id().slice(0, -8),
-                        keywords: app.get_keywords() || "" });
+                        keywords: latinise((app.get_keywords() || "")) });
     }
 
     highlight() {
@@ -2722,7 +2722,7 @@ class CinnamonMenuApplet extends Applet.TextIconApplet {
         this._previousTreeSelectedActor = null;
         this._previousSelectedActor = null;
 
-        let rePattern = escapeRegExp(latinise(pattern.toLowerCase()));
+        let rePattern = escapeRegExp(latinise(pattern));
         // when we don't get a loose match. we could use normal string functions for half of these
         // but case-insensitive re is easier to do.
         let regExps = [
@@ -2751,7 +2751,7 @@ class CinnamonMenuApplet extends Applet.TextIconApplet {
                         score = nRegexs - i + 0.1;
                     } else if (regExps[i].test(button.keywords)) {
                         score = nRegexs - i + 0.2;
-                    } else if (regExps[i].test(button.description)) {
+                    } else if (regExps[i].test(latinise(button.description))) {
                         score = nRegexs - i;
                     }
                 } else {
