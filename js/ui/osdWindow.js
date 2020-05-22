@@ -114,7 +114,9 @@ OsdWindow.prototype = {
         this._hideTimeoutId = 0;
         this._reset();
 
-        Main.layoutManager.connect('monitors-changed', Lang.bind(this, this._monitorsChanged));
+        let changedId = Main.layoutManager.connect('monitors-changed', Lang.bind(this, this._monitorsChanged));
+        this.actor.connect("destroy", () => { Main.layoutManager.disconnect(changedId) });
+
         this._onOsdSettingsChanged();
 
         Main.uiGroup.add_child(this.actor);
