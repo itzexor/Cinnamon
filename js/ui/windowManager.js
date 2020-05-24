@@ -945,8 +945,8 @@ var WindowManager = class WindowManager {
         osd.show();
 
         if (effectsEnabled) {
-            osd.set_opacity = 0;
-            addTween(osd, {
+            osd.actor.opacity = 0;
+            addTween(osd.actor, {
                 opacity: 255,
                 time: WORKSPACE_OSD_TIMEOUT,
                 transition: 'linear',
