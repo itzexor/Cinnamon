@@ -81,17 +81,28 @@ class CinnamonNotificationsApplet extends Applet.TextIconApplet {
         this.clear_action.connect('activate', Lang.bind(this, this._clear_all));
         this.clear_action.actor.hide();
 
+        this._genericNotifications = new Set();
+        this._notifSourceMap = new Map();
+        this._clearBySourceMenu = new PopupMenu.PopupSubMenuMenuItem(_("Clear notifications from..."));
+        this._clearOtherMenuItem = new PopupMenu.PopupMenuItem("placeholder text");
+        this._clearOtherMenuItem.connect('activate', () => this._clearBySource(null));
+        this._clearBySourceMenu.menu.addMenuItem(this._clearOtherMenuItem);
+
         if (this._orientation == St.Side.BOTTOM) {
             this.menu.addMenuItem(this.menu_label);
             this.menu.addActor(this._maincontainer);
             this.menu.addMenuItem(this.clear_separator);
             this.menu.addMenuItem(this.clear_action);
+            this.menu.addMenuItem(this._clearBySourceMenu);
         } else {
+            this.menu.addMenuItem(this._clearBySourceMenu);
             this.menu.addMenuItem(this.clear_action);
             this.menu.addMenuItem(this.clear_separator);
             this.menu.addMenuItem(this.menu_label);
             this.menu.addActor(this._maincontainer);
         }
+
+        this._clearBySourceMenu.actor.hide();
 
         this.scrollview = new St.ScrollView({ x_fill: true, y_fill: true, y_align: St.Align.START, style_class: "vfade"});
         this._maincontainer.add(this.scrollview);
@@ -144,12 +155,37 @@ class CinnamonNotificationsApplet extends Applet.TextIconApplet {
         this._notificationbin.add(notification.actor);
         notification.actor._parent_container = this._notificationbin;
         notification.actor.add_style_class_name('notification-applet-padding');
+        // Categorize by source.
+        // We keep generic (no source app) notifications in a set all together.
+        // Notifications with a source app are stored in a map with the structure
+        // key: Source object, value: [notifications Set(), clear source PopupMenuItem]
+        let isGeneric = notification.source.app == null;
+        if (isGeneric) {
+            this._genericNotifications.add(notification);
+        } else {
+            if (this._notifSourceMap.has(notification.source)) {
+                this._notifSourceMap.get(notification.source)[0].add(notification);
+            } else {
+                let menuItem = new PopupMenu.PopupMenuItem(notification.source.app.get_name());
+                menuItem.connect('activate', () => this._clearBySource(notification.source));
+                this._clearBySourceMenu.menu.addMenuItem(menuItem);
+                menuItem.actor.show();
+                this._notifSourceMap.set(notification.source, [new Set([notification]), menuItem]);
+            }
+        }
         // Register for destruction.
         notification.connect('scrolling-changed', (notif, scrolling) => { this.menu.passEvents = scrolling });
         notification.connect('destroy', () => {
             let i = this.notifications.indexOf(notification);
             if (i != -1)
                 this.notifications.splice(i, 1);
+            if (isGeneric) {
+                this._genericNotifications.delete(notification);
+            } else {
+                let obj = this._notifSourceMap.get(notification.source);
+                if (obj)
+                    obj[0].delete(notification);
+            }
             this.update_list();
         });
         notification._timeLabel.show();
@@ -157,7 +193,54 @@ class CinnamonNotificationsApplet extends Applet.TextIconApplet {
         this.update_list();
     }
 
+    updateSourceList() {
+        let uniqueSources = 0;
+        if (this._genericNotifications.size) {
+            this._clearOtherMenuItem.label.text = _("Unknown Applications (%d)").format(this._genericNotifications.size);
+            this._clearOtherMenuItem.actor.show();
+            uniqueSources = 1;
+        } else {
+            this._clearOtherMenuItem.actor.hide();
+        }
+
+        // If there are no notifications left in a source then we delete the mapping.
+        for (let [k, v] of this._notifSourceMap) {
+            if (v[0].size > 0) {
+                v[1].label.text = "%s (%d)".format(k.app.get_name(), v[0].size);
+                uniqueSources++;
+            } else {
+                v[1].destroy();
+                this._notifSourceMap.delete(k);
+            }
+        }
+
+        // We don't need clear by source unless we have > 1 source
+        if (uniqueSources > 1) {
+            this._clearBySourceMenu.actor.show();
+        } else {
+            this._clearBySourceMenu.menu.close();
+            this._clearBySourceMenu.actor.hide();
+        }
+    }
+
+    _clearBySource(source) {
+        let set;
+        if (source == null) { 
+            set = this._genericNotifications;
+        } else {
+            set = this._notifSourceMap.get(source);
+            if (!set)
+                return;
+            set = set[0];
+        }
+
+        for (let n of set) {
+            n.destroy();
+        }
+    }
+
     update_list () {
+        this.updateSourceList();
         try {
             let count = this.notifications.length;
             if (count > 0) {    // There are notifications.

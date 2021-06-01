@@ -13,10 +13,6 @@ const MessageTray = imports.ui.messageTray;
 const Params = imports.misc.params;
 const Mainloop = imports.mainloop;
 
-// don't automatically clear these apps' notifications on window focus
-// lowercase only
-const AUTOCLEAR_BLACKLIST = ['chromium', 'firefox', 'google chrome'];
-
 let nextNotificationId = 1;
 
 // Should really be defined in Gio.js
@@ -125,11 +121,6 @@ NotificationDaemon.prototype = {
         }
         setting(this, this.settings, "boolean", "removeOld", "remove-old");
         setting(this, this.settings, "int", "timeout", "timeout");
-
-        Cinnamon.WindowTracker.get_default().connect('notify::focus-app',
-            Lang.bind(this, this._onFocusAppChanged));
-        Main.overview.connect('hidden',
-            Lang.bind(this, this._onFocusAppChanged));
     },
 
    // Create an icon for a notification from icon string/path.
@@ -550,27 +541,6 @@ NotificationDaemon.prototype = {
         ];
     },
 
-    _onFocusAppChanged: function() {
-        if (!this._sources.length)
-            return;
-
-        let tracker = Cinnamon.WindowTracker.get_default();
-        if (!tracker.focus_app)
-            return;
-
-        let name = tracker.focus_app.get_name();
-        if (name && AUTOCLEAR_BLACKLIST.includes(name.toLowerCase()))
-            return;
-
-        for (let i = 0; i < this._sources.length; i++) {
-            let source = this._sources[i];
-            if (source.app == tracker.focus_app) {
-                source.destroyNonResidentNotifications();
-                return;
-            }
-        }
-    },
-
     _emitNotificationClosed: function(id, reason) {
         this._dbusImpl.emit_signal('NotificationClosed',
                                    GLib.Variant.new('(uu)', [id, reason]));
@@ -717,7 +687,6 @@ Source.prototype = {
     },
 
     open: function(notification) {
-        this.destroyNonResidentNotifications();
         this.openApp();
     },
 
